@@ -232,16 +232,25 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 				ctx, cancel := context.WithTimeout(s.Context(), time.Second*15)
 				defer cancel()
 
-				if err := s.Sync(ctx); err != nil {
+				err := s.Sync(ctx)
+				if err != nil && !errors.Is(err, ErrSessionDeleted) {
 					h.log.Error("error synchronizing multiplayer session",
 						slog.Any("error", err))
 					return
 				}
-				h.log.Debug("synchronized multiplayer session",
-					slog.Group("session",
-						slog.String("ref", s.Reference().URL().String()),
-					),
-				)
+				if errors.Is(err, ErrSessionDeleted) {
+					h.log.Debug("multiplayer session deleted",
+						slog.Group("session",
+							slog.String("ref", s.Reference().URL().String()),
+						),
+					)
+				} else {
+					h.log.Debug("synchronized multiplayer session",
+						slog.Group("session",
+							slog.String("ref", s.Reference().URL().String()),
+						),
+					)
+				}
 				s.handler().HandleSessionChange(s)
 			}(session)
 		}

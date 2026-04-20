@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/internal"
@@ -78,10 +79,9 @@ func (c *Client) activities(ctx context.Context, scid uuid.UUID, owners searchRe
 		Type:            "activity",
 		ServiceConfigID: scid,
 		Owners:          owners,
-	}, &result, append(opts,
-		internal.RequestHeader("Content-Type", "application/json"),
+	}, &result, slices.Concat(opts, []internal.RequestOption{
 		internal.ContractVersion(contractVersion),
-	)); err != nil {
+	})); err != nil {
 		return nil, err
 	}
 	return result.Activities, nil
@@ -106,10 +106,9 @@ func (s *Session) Invite(ctx context.Context, xuid, titleID string, opts ...inte
 		InviteAttributes: InviteAttributes{
 			TitleID: titleID,
 		},
-	}, &handle, append(opts,
-		internal.RequestHeader("Content-Type", "application/json"),
+	}, &handle, slices.Concat(opts, []internal.RequestOption{
 		internal.ContractVersion(contractVersion),
-	)); err != nil {
+	})); err != nil {
 		return nil, err
 	}
 	if handle == nil {
@@ -210,7 +209,6 @@ func (s *Session) writeActivity(ctx context.Context) error {
 		SessionReference: s.ref,
 		Version:          1,
 	}, nil, []internal.RequestOption{
-		internal.RequestHeader("Content-Type", "application/json"),
 		internal.ContractVersion(contractVersion),
 	})
 }

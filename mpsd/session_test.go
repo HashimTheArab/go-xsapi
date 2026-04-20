@@ -48,7 +48,7 @@ func assertDeletedSession(t testing.TB, client *Client, session *Session) {
 	if got := session.etag; got != "" {
 		t.Fatalf("etag = %q, want empty", got)
 	}
-	if err := session.Context().Err(); err != context.Canceled {
+	if err := session.Context().Err(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("session context err = %v, want %v", err, context.Canceled)
 	}
 	if client != nil {
@@ -192,8 +192,8 @@ func TestSessionSetCustomPropertiesMarksDeletedOnNoContent(t *testing.T) {
 	})
 	session.etag = `"old-etag"`
 
-	if err := session.SetCustomProperties(context.Background(), json.RawMessage(`{"property":"patched"}`)); err != nil {
-		t.Fatalf("SetCustomProperties returned error: %v", err)
+	if err := session.SetCustomProperties(context.Background(), json.RawMessage(`{"property":"patched"}`)); !errors.Is(err, ErrSessionDeleted) {
+		t.Fatalf("SetCustomProperties returned error: %v, want %v", err, ErrSessionDeleted)
 	}
 	if session.cache.Properties != nil {
 		t.Fatalf("cache properties not cleared: %+v", session.cache.Properties)
@@ -202,7 +202,7 @@ func TestSessionSetCustomPropertiesMarksDeletedOnNoContent(t *testing.T) {
 		t.Fatalf("cache not cleared after delete: %+v", session.cache)
 	}
 	assertDeletedSession(t, nil, session)
-	if err := session.Sync(context.Background()); err != net.ErrClosed {
+	if err := session.Sync(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Sync error = %v, want %v", err, net.ErrClosed)
 	}
 }
@@ -316,8 +316,8 @@ func TestSessionSetCustomPropertiesTreatsConflictFollowedByDeleteAsDeleted(t *te
 	session.etag = `"etag-1"`
 	client.sessions[ref.URL().String()] = session
 
-	if err := session.SetCustomProperties(context.Background(), json.RawMessage(`{"property":"patched"}`)); err != nil {
-		t.Fatalf("SetCustomProperties returned error: %v", err)
+	if err := session.SetCustomProperties(context.Background(), json.RawMessage(`{"property":"patched"}`)); !errors.Is(err, ErrSessionDeleted) {
+		t.Fatalf("SetCustomProperties returned error: %v, want %v", err, ErrSessionDeleted)
 	}
 	if requests != 2 {
 		t.Fatalf("requests = %d, want 2", requests)
@@ -349,8 +349,8 @@ func TestSessionSyncMarksDeletedOnNoContent(t *testing.T) {
 	session.etag = `"old-etag"`
 	client.sessions[ref.URL().String()] = session
 
-	if err := session.Sync(context.Background()); err != nil {
-		t.Fatalf("Sync returned error: %v", err)
+	if err := session.Sync(context.Background()); !errors.Is(err, ErrSessionDeleted) {
+		t.Fatalf("Sync returned error: %v, want %v", err, ErrSessionDeleted)
 	}
 	if session.cache.Properties != nil || session.cache.Constants != nil || session.cache.Members != nil || session.cache.RoleTypes != nil {
 		t.Fatalf("cache not cleared after deletion: %+v", session.cache)
@@ -383,8 +383,8 @@ func TestSessionSetCustomPropertiesTreatsBootstrapDeleteAsDeleted(t *testing.T) 
 	})
 	client.sessions[ref.URL().String()] = session
 
-	if err := session.SetCustomProperties(context.Background(), json.RawMessage(`{"property":"patched"}`)); err != nil {
-		t.Fatalf("SetCustomProperties returned error: %v", err)
+	if err := session.SetCustomProperties(context.Background(), json.RawMessage(`{"property":"patched"}`)); !errors.Is(err, ErrSessionDeleted) {
+		t.Fatalf("SetCustomProperties returned error: %v, want %v", err, ErrSessionDeleted)
 	}
 	if requests != 1 {
 		t.Fatalf("requests = %d, want 1", requests)
@@ -518,10 +518,10 @@ func TestSessionCloseContextClosesHandleWithoutClearingSyncedState(t *testing.T)
 	if _, ok := client.sessions[ref.URL().String()]; ok {
 		t.Fatal("session still registered after close")
 	}
-	if err := session.Context().Err(); err != context.Canceled {
+	if err := session.Context().Err(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("session context err = %v, want %v", err, context.Canceled)
 	}
-	if err := session.Sync(context.Background()); err != net.ErrClosed {
+	if err := session.Sync(context.Background()); !errors.Is(err, net.ErrClosed) {
 		t.Fatalf("Sync error = %v, want %v", err, net.ErrClosed)
 	}
 }
@@ -580,7 +580,7 @@ func TestSessionCloseContextConcurrentCloseSendsSingleUpdate(t *testing.T) {
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("requests = %d, want 1", got)
 	}
-	if err := session.Context().Err(); err != context.Canceled {
+	if err := session.Context().Err(); !errors.Is(err, context.Canceled) {
 		t.Fatalf("session context err = %v, want %v", err, context.Canceled)
 	}
 }

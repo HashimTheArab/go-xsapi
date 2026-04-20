@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/df-mc/go-xsapi/v2/internal"
@@ -107,11 +108,11 @@ func (c *Client) Publish(ctx context.Context, ref SessionReference, config Publi
 
 	// Newly create a multiplayer session.
 	// This request call will fail if the session already exists.
-	req, err := internal.WithJSONBody(ctx, http.MethodPut, ref.URL().String(), d, append(opts,
+	req, err := internal.WithJSONBody(ctx, http.MethodPut, ref.URL().String(), d, slices.Concat(opts, []internal.RequestOption{
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.RequestHeader("If-None-Match", "*"),
 		internal.ContractVersion(contractVersion),
-	))
+	}))
 	if err != nil {
 		return nil, fmt.Errorf("make request: %w", err)
 	}

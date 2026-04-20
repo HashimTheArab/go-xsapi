@@ -228,8 +228,9 @@ const (
 	preconditionCachedETag
 )
 
-// errSessionDeleted is returned when the session is deleted.
-var errSessionDeleted = errors.New("mpsd: session deleted")
+// ErrSessionDeleted is returned when a sync or update discovers that the
+// remote session has been deleted.
+var ErrSessionDeleted = errors.New("mpsd: session deleted")
 
 // ifMatchHeader returns the If-Match header value based on the precondition.
 func (s *Session) ifMatchHeader(ctx context.Context, precondition updatePrecondition) (string, error) {
@@ -407,7 +408,7 @@ func (s *Session) Sync(ctx context.Context) error {
 			return nil
 		case http.StatusNoContent:
 			s.markDeleted()
-			return nil
+			return ErrSessionDeleted
 		default:
 			return internal.UnexpectedStatusCode(resp)
 		}
@@ -571,6 +572,7 @@ func (s *Session) finishUpdate(deleted bool, err error) error {
 	}
 	if deleted {
 		s.markDeleted()
+		return ErrSessionDeleted
 	}
 	return nil
 }
@@ -599,7 +601,7 @@ func (s *Session) synchronizedUpdateWhile(ctx context.Context, changes SessionDe
 		}
 
 		deleted, conflict, err := s.commit(ctx, changes, preconditionCachedETag, opts)
-		if errors.Is(err, errSessionDeleted) {
+		if errors.Is(err, ErrSessionDeleted) {
 			return true, nil
 		}
 		if err != nil {
@@ -622,7 +624,7 @@ func (s *Session) synchronizedUpdateWhile(ctx context.Context, changes SessionDe
 
 // currentETag returns the last observed session ETag, refreshing it from MPSD
 // if necessary. If the refresh discovers that the session no longer exists,
-// errSessionDeleted is returned.
+// ErrSessionDeleted is returned.
 func (s *Session) currentETag(ctx context.Context) (string, error) {
 	// If the ETag is already set, return it.
 	s.cacheMu.RLock()
@@ -644,7 +646,7 @@ func (s *Session) currentETag(ctx context.Context) (string, error) {
 	if etag == "" {
 		// A sync that closed the session means the remote session was deleted.
 		if s.isClosed() {
-			return "", errSessionDeleted
+			return "", ErrSessionDeleted
 		}
 		return "", errors.New("mpsd: synchronized update requires ETag")
 	}
