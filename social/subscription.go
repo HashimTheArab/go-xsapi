@@ -94,7 +94,7 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 	}
 	if err := json.Unmarshal(custom, &data); err != nil {
 		h.log.Error("error decoding event payload",
-			slog.String("custom", string(custom)),
+			slog.Int("payload_bytes", len(custom)),
 			slog.Any("error", err),
 		)
 		return
@@ -104,7 +104,7 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 	case notificationTypeIncomingFriendRequestCountChanged:
 		if data.Count == nil {
 			h.log.Error("friend request count is absent from subscription event payload",
-				slog.String("custom", string(custom)),
+				slog.String("type", data.Type),
 			)
 			return
 		}
@@ -118,7 +118,7 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 	case NotificationTypeAdded, NotificationTypeRemoved, NotificationTypeChanged:
 		if len(data.XUIDs) == 0 {
 			h.log.Error("XUIDs are absent from subscription event payload",
-				slog.String("custom", string(custom)),
+				slog.String("type", data.Type),
 			)
 			return
 		}

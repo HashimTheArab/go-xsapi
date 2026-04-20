@@ -202,7 +202,9 @@ func (c *Client) RoundTrip(req *http.Request) (*http.Response, error) {
 		}
 		data, req2.Body = signingBuffer.Bytes(), io.NopCloser(signingBuffer)
 	}
-	policy.Sign(req2, data, c.src.ProofKey(), xal.ServerTime())
+	if err := policy.Sign(req2, data, c.src.ProofKey(), xal.ServerTime()); err != nil {
+		return nil, fmt.Errorf("sign request: %w", err)
+	}
 
 	return c.baseTransport().RoundTrip(req2)
 }

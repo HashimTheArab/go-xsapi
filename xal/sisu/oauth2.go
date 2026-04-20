@@ -210,8 +210,11 @@ func (conf Config) AuthCodeURL(ctx context.Context, device xasd.TokenSource, sta
 		return "", fmt.Errorf("make request: %w", err)
 	}
 	req.Header.Set("User-Agent", conf.UserAgent)
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-xbl-contract-version", "1")
-	nsal.AuthPolicy.Sign(req, buf.Bytes(), device.ProofKey(), timestamp.Now())
+	if err := nsal.AuthPolicy.Sign(req, buf.Bytes(), device.ProofKey(), timestamp.Now()); err != nil {
+		return "", fmt.Errorf("sign request: %w", err)
+	}
 
 	var client *http.Client
 	if hc, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok {

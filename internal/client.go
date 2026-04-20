@@ -47,8 +47,8 @@ func UnexpectedStatusCode(resp *http.Response) error {
 // If reqBody is non-nil, it is JSON-encoded and sent as the request body with
 // the 'Content-Type' header set to 'application/json'.
 //
-// If respBody is non-nil and the response status is 200 OK or 201 Created,
-// the response body is JSON-decoded into respBody.
+// If respBody is non-nil and the response status is 200 OK, 201 Created, or
+// 204 No Content, the response body is JSON-decoded into respBody when present.
 //
 // opts are applied to the request before it is sent. Useful options are defined in this package.
 func Do(ctx context.Context, client *http.Client, method, u string, reqBody, respBody any, opts []RequestOption) error {
@@ -83,6 +83,8 @@ func Do(ctx context.Context, client *http.Client, method, u string, reqBody, res
 				return fmt.Errorf("decode response body: %w", err)
 			}
 		}
+		return nil
+	case http.StatusNoContent:
 		return nil
 	default:
 		return UnexpectedStatusCode(resp)
