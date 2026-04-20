@@ -34,8 +34,11 @@ func (t *Token) Valid() bool {
 //
 // XSTS tokens may contain claims for multiple users, but in practice the
 // first entry represents the authenticated user associated with the token.
-// Callers should ensure the token is valid before calling this method.
+// A zero UserInfo is returned if the token is nil or carries no user claims.
 func (t *Token) UserInfo() UserInfo {
+	if t == nil || len(t.DisplayClaims.UserInfo) == 0 {
+		return UserInfo{}
+	}
 	return t.DisplayClaims.UserInfo[0]
 }
 
@@ -49,7 +52,12 @@ func (t *Token) UserInfo() UserInfo {
 // services and certain title-specific endpoints. Some third-party services,
 // such as PlayFab, also accept this value as a JSON field for linking an Xbox
 // account to another identity provider.
+//
+// An empty string is returned if the token is nil.
 func (t *Token) String() string {
+	if t == nil {
+		return ""
+	}
 	return "XBL3.0 x=" + t.UserInfo().UserHash + ";" + t.Token
 }
 

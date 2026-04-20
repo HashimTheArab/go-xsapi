@@ -111,7 +111,7 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 
 		h.subscriptionMu.RLock()
 		for _, handler := range h.subscriptionHandlers {
-			go handler.HandleIncomingFriendRequestCountChange(*data.Count)
+			handler.HandleIncomingFriendRequestCountChange(*data.Count)
 		}
 		h.subscriptionMu.RUnlock()
 		return
@@ -125,8 +125,7 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 
 		h.subscriptionMu.RLock()
 		for _, handler := range h.subscriptionHandlers {
-			xuids := slices.Clone(data.XUIDs)
-			go handler.HandleSocialNotification(data.Type, xuids)
+			handler.HandleSocialNotification(data.Type, slices.Clone(data.XUIDs))
 		}
 		h.subscriptionMu.RUnlock()
 	default:
