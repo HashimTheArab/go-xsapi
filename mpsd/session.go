@@ -699,9 +699,9 @@ type SessionReference struct {
 // URL returns the URL locating to the HTTP resource of the session.
 func (ref SessionReference) URL() *url.URL {
 	return endpoint.JoinPath(
-		"/serviceconfigs/", ref.ServiceConfigID.String(),
-		"/sessionTemplates", ref.TemplateName,
-		"/sessions", ref.Name,
+		"serviceconfigs", ref.ServiceConfigID.String(),
+		"sessionTemplates", ref.TemplateName,
+		"sessions", ref.Name,
 	)
 }
 

@@ -174,9 +174,9 @@ type Privileges []uint32
 // encodes to:
 //
 //	"185 188 254"
-func (p *Privileges) MarshalJSON() ([]byte, error) {
-	s := make([]string, len(*p))
-	for i, value := range *p {
+func (p Privileges) MarshalJSON() ([]byte, error) {
+	s := make([]string, len(p))
+	for i, value := range p {
 		s[i] = strconv.FormatUint(uint64(value), 10)
 	}
 	return json.Marshal(strings.Join(s, " "))
