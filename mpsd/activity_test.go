@@ -6,12 +6,15 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/df-mc/go-xsapi/v2/xal/xsts"
 	"github.com/google/uuid"
 )
 
-func TestActivitiesOmitsSocialGroupFilter(t *testing.T) {
+func TestActivitiesUsesPeopleSocialGroupFilter(t *testing.T) {
 	var requestBody map[string]any
+	userXUID := "2533274799999999"
 	client := &Client{
+		userInfo: xsts.UserInfo{XUID: userXUID},
 		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			defer req.Body.Close()
 			if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
@@ -29,11 +32,36 @@ func TestActivitiesOmitsSocialGroupFilter(t *testing.T) {
 	if !ok {
 		t.Fatalf("owners = %#v, want object", requestBody["owners"])
 	}
-	if _, ok := owners["people"]; ok {
-		t.Fatalf("owners.people = %#v, want omitted", owners["people"])
+	people, ok := owners["people"].(map[string]any)
+	if !ok {
+		t.Fatalf("owners.people = %#v, want object", owners["people"])
+	}
+	if got := people["moniker"]; got != "people" {
+		t.Fatalf("owners.people.moniker = %#v, want %q", got, "people")
+	}
+	if got := people["monikerXuid"]; got != userXUID {
+		t.Fatalf("owners.people.monikerXuid = %#v, want %q", got, userXUID)
 	}
 	if _, ok := owners["xuids"]; ok {
-		t.Fatalf("owners.xuids = %#v, want omitted for all-users query", owners["xuids"])
+		t.Fatalf("owners.xuids = %#v, want omitted for social-group query", owners["xuids"])
+	}
+}
+
+func TestActivitiesForUsersRequiresAtLeastOneXUID(t *testing.T) {
+	requests := 0
+	client := &Client{
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return testResponse(req, http.StatusOK, nil, []byte(`{"results":[]}`)), nil
+		})},
+	}
+
+	_, err := client.ActivitiesForUsers(context.Background(), uuid.New(), nil)
+	if err == nil || err.Error() != "mpsd: activities for users requires at least one xuid" {
+		t.Fatalf("ActivitiesForUsers error = %v, want xuid validation error", err)
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want 0", requests)
 	}
 }
 
