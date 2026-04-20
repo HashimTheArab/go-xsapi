@@ -19,6 +19,15 @@ import (
 	"golang.org/x/oauth2/microsoft"
 )
 
+// oauth2ContextClient returns the HTTP client from the context,
+// or [http.DefaultClient] if not present.
+func oauth2ContextClient(ctx context.Context) *http.Client {
+	if hc, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && hc != nil {
+		return hc
+	}
+	return http.DefaultClient
+}
+
 // DeviceAuth returns a device auth struct which contains a device code
 // and authorization information provided for users to enter on another device.
 func (conf Config) DeviceAuth(ctx context.Context) (*oauth2.DeviceAuthResponse, error) {
@@ -96,13 +105,7 @@ func (tf *tokenRefresher) Token() (*oauth2.Token, error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("User-Agent", tf.conf.UserAgent)
 
-	var client *http.Client
-	if hc, ok := tf.ctx.Value(oauth2.HTTPClient).(*http.Client); ok {
-		client = hc
-	} else {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := oauth2ContextClient(tf.ctx).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -216,13 +219,7 @@ func (conf Config) AuthCodeURL(ctx context.Context, device xasd.TokenSource, sta
 		return "", fmt.Errorf("sign request: %w", err)
 	}
 
-	var client *http.Client
-	if hc, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok {
-		client = hc
-	} else {
-		client = http.DefaultClient
-	}
-	resp, err := client.Do(req)
+	resp, err := oauth2ContextClient(ctx).Do(req)
 	if err != nil {
 		return "", err
 	}
