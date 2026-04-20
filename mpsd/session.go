@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -184,11 +185,11 @@ func (s *Session) commit(ctx context.Context, changes SessionDescription, precon
 	if err != nil {
 		return false, false, err
 	}
-	req, err := internal.WithJSONBody(ctx, http.MethodPut, s.ref.URL().String(), changes, append(opts,
+	req, err := internal.WithJSONBody(ctx, http.MethodPut, s.ref.URL().String(), changes, slices.Concat(opts, []internal.RequestOption{
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.RequestHeader("If-Match", match),
 		internal.ContractVersion(contractVersion),
-	))
+	}))
 	if err != nil {
 		return false, false, fmt.Errorf("make request: %w", err)
 	}

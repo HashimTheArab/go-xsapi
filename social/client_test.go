@@ -158,6 +158,58 @@ func TestClientCloseContextSerializesConcurrentCalls(t *testing.T) {
 	}
 }
 
+func TestClientCloseContextDoesNotHoldSubscriptionMuDuringUnsubscribe(t *testing.T) {
+	subscription := &rta.Subscription{}
+	unsub := &fakeUnsubscriber{
+		called:  make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	client := &Client{
+		subscription:         subscription,
+		subscriptionHandlers: []SubscriptionHandler{NopSubscriptionHandler{}},
+		unsub:                unsub,
+		log:                  slogDiscard(),
+	}
+	handler := &subscriptionHandler{
+		Client:             client,
+		sourceSubscription: subscription,
+	}
+
+	closeErr := make(chan error, 1)
+	go func() {
+		closeErr <- client.CloseContext(context.Background())
+	}()
+
+	select {
+	case <-unsub.called:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseContext to start unsubscribe")
+	}
+
+	handlerDone := make(chan struct{})
+	go func() {
+		handler.HandleReconnect(errors.New("reconnect failed"))
+		close(handlerDone)
+	}()
+
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("HandleReconnect blocked behind CloseContext unsubscribe")
+	}
+
+	close(unsub.release)
+
+	select {
+	case err := <-closeErr:
+		if err != nil {
+			t.Fatalf("CloseContext returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CloseContext to finish")
+	}
+}
+
 func TestClientSubscribeDoesNotRegisterHandlerWhenInitialSubscribeFails(t *testing.T) {
 	handler := NopSubscriptionHandler{}
 	sub := &fakeSubscriber{err: errors.New("subscribe failed")}

@@ -141,6 +141,7 @@ func (c *Client) Publish(ctx context.Context, ref SessionReference, config Publi
 // connection reconciliation is still in flight.
 func (c *Client) createSessionAndReconcile(ctx context.Context, ref SessionReference, resp *http.Response, connectionID uuid.UUID, action string) (*Session, error) {
 	backgroundSeq := c.backgroundSeq.Load()
+	subscriptionSeq := c.subscriptionSeq.Load()
 	s, err := c.createSession(ctx, ref, resp)
 	if err != nil {
 		return nil, err
@@ -149,9 +150,9 @@ func (c *Client) createSessionAndReconcile(ctx context.Context, ref SessionRefer
 		s.log.Warn("automatic session tracking lost before initial reconcile")
 		return s, nil
 	}
-	if err := c.reconcileSessionConnectionWithInstall(ctx, s, connectionID, c.backgroundInstallGate(backgroundSeq)); err != nil {
+	if err := c.reconcileSessionConnectionWithInstall(ctx, s, connectionID, c.subscriptionInstallGate(subscriptionSeq)); err != nil {
 		s.log.Error("error reconciling session connection after "+action, slog.Any("error", err))
-		go c.retryReconcileSessionConnection(s, connectionID, backgroundSeq)
+		go c.retryReconcileSessionConnection(s, connectionID, backgroundSeq, subscriptionSeq)
 	}
 	return s, nil
 }
