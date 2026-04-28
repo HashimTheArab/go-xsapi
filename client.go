@@ -389,7 +389,9 @@ func WithoutAuthHeaders(req *http.Request, headers ...string) *http.Request {
 }
 
 // headerExclusionsKey is the context key used to define headerExclusionSet.
-const headerExclusionKey = "xsapi-client-header-exclusions"
+var headerExclusionKey headerExclusionContextKey
+
+type headerExclusionContextKey struct{}
 
 type headerExclusionSet []string
 
