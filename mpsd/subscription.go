@@ -232,7 +232,9 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 	h.sessionsMu.RLock()
 	sessions := make([]*Session, 0, len(h.sessions))
 	for _, session := range h.sessions {
-		if slices.Contains(refs, session.ref) {
+		if slices.ContainsFunc(refs, func(ref SessionReference) bool {
+			return ref.Equal(session.Reference())
+		}) {
 			sessions = append(sessions, session)
 		}
 	}

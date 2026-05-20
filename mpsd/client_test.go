@@ -589,6 +589,54 @@ func TestClientRetryReconcileSessionConnectionRepairsSession(t *testing.T) {
 	}
 }
 
+func TestSubscriptionHandlerMatchesShoulderTapReferencesCaseInsensitively(t *testing.T) {
+	ref := SessionReference{
+		ServiceConfigID: uuid.New(),
+		TemplateName:    "Template",
+		Name:            "SESSION",
+	}
+	changed := make(chan struct{}, 1)
+	client := &Client{
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			wantPath := "/" + ref.URL().Path
+			if got := req.URL.Path; got != wantPath {
+				t.Fatalf("request path = %q, want %q", got, wantPath)
+			}
+			header := make(http.Header)
+			header.Set("ETag", `"next"`)
+			return testResponse(req, http.StatusOK, header, []byte(`{}`)), nil
+		})},
+		log:      slogDiscard(),
+		sessions: map[string]*Session{},
+	}
+	session := testSession(ref, client, SessionDescription{})
+	session.Handle(sessionChangeHandler(func(*Session) {
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}))
+	client.sessions[ref.URL().String()] = session
+	handler := &subscriptionHandler{
+		Client: client,
+		log:    slogDiscard(),
+	}
+
+	payload, err := json.Marshal(subscriptionEvent{ShoulderTaps: []shoulderTap{{
+		Resource: ref.ServiceConfigID.String() + "~template~session",
+	}}})
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	handler.HandleEvent(payload)
+
+	select {
+	case <-changed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for case-insensitive shoulder tap match")
+	}
+}
+
 func TestSubscriptionHandlerHandleReconnectErrorClearsSubscription(t *testing.T) {
 	client := &Client{
 		log:      slogDiscard(),

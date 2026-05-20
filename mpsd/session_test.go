@@ -20,6 +20,12 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+type sessionChangeHandler func(*Session)
+
+func (h sessionChangeHandler) HandleSessionChange(session *Session) {
+	h(session)
+}
+
 func testResponse(req *http.Request, statusCode int, header http.Header, body []byte) *http.Response {
 	if header == nil {
 		header = make(http.Header)
