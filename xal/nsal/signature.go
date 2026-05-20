@@ -40,10 +40,10 @@ type SignaturePolicy struct {
 // The key must match the proof key used in the authentication request, and the timestamp
 // should be as close to the server time as possible to avoid rejection.
 //
-// Generate returns an error if key is nil or if [ecdsa.Sign] fails.
+// Generate returns an error if key is nil, key is not P-256, or if [ecdsa.Sign] fails.
 func (policy SignaturePolicy) Generate(request *http.Request, body []byte, key *ecdsa.PrivateKey, timestamp time.Time) ([]byte, error) {
-	if key == nil {
-		return nil, errors.New("xal/nsal: signature key must be non-nil")
+	if err := validateSignatureKey(key); err != nil {
+		return nil, err
 	}
 	currentTime := windowsTimestamp(timestamp)
 	hash := sha256.New()
@@ -123,6 +123,21 @@ func (policy SignaturePolicy) Sign(request *http.Request, body []byte, key *ecds
 // requests for Xbox Live, including XASD, XAST, XASU, and XSTS.
 var AuthPolicy = SignaturePolicy{
 	Version: 1,
+}
+
+var errUnsupportedSignatureKeyCurve = errors.New("xal/nsal: signature key must use P-256")
+
+func validateSignatureKey(key *ecdsa.PrivateKey) error {
+	if key == nil {
+		return errors.New("xal/nsal: signature key must be non-nil")
+	}
+	if key.Curve == nil {
+		return errUnsupportedSignatureKeyCurve
+	}
+	if params := key.Curve.Params(); params == nil || params.Name != "P-256" || params.BitSize != 256 {
+		return errUnsupportedSignatureKeyCurve
+	}
+	return nil
 }
 
 // windowsTimestamp returns a Windows specific timestamp. It has a certain offset from Unix time

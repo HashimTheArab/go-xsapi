@@ -472,12 +472,32 @@ func TestNotifyReconnectSuccessCallsReadyAfterReconnect(t *testing.T) {
 
 	conn := newTestConn()
 	successDone := conn.startReconnectSuccess(sub)
-	conn.notifyReconnectReadyAfterSuccess(sub, successDone)
+	conn.notifyReconnectReadyAfterSuccess(sub, successDone, nil)
 
 	first := <-events
 	second := <-events
 	if first != "reconnect" || second != "ready" {
 		t.Fatalf("callback order = [%s %s], want [reconnect ready]", first, second)
+	}
+}
+
+func TestNotifyReconnectReadyAfterSuccessSkipsStaleReaderWave(t *testing.T) {
+	ready := make(chan struct{}, 1)
+	sub := &Subscription{}
+	sub.Handle(reconnectReadyTestHandler{ready: ready})
+
+	conn := newTestConn()
+	readerDone := make(chan struct{})
+	successDone := make(chan struct{})
+	close(readerDone)
+	close(successDone)
+
+	conn.notifyReconnectReadyAfterSuccess(sub, successDone, readerDone)
+
+	select {
+	case <-ready:
+		t.Fatal("reconnect-ready callback fired for stale reader wave")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

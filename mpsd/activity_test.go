@@ -3,6 +3,7 @@ package mpsd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"testing"
 
@@ -16,7 +17,7 @@ func TestActivitiesUsesPeopleSocialGroupFilter(t *testing.T) {
 	client := &Client{
 		userInfo: xsts.UserInfo{XUID: userXUID},
 		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			defer req.Body.Close()
+			defer func() { _ = req.Body.Close() }()
 			if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
 				t.Fatalf("decode request body: %v", err)
 			}
@@ -47,6 +48,24 @@ func TestActivitiesUsesPeopleSocialGroupFilter(t *testing.T) {
 	}
 }
 
+func TestActivitiesRequiresCallerXUID(t *testing.T) {
+	requests := 0
+	client := &Client{
+		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			requests++
+			return testResponse(req, http.StatusOK, nil, []byte(`{"results":[]}`)), nil
+		})},
+	}
+
+	_, err := client.Activities(context.Background(), uuid.New())
+	if !errors.Is(err, errActivitiesRequiresCallerXUID) {
+		t.Fatalf("Activities error = %v, want %v", err, errActivitiesRequiresCallerXUID)
+	}
+	if requests != 0 {
+		t.Fatalf("requests = %d, want 0", requests)
+	}
+}
+
 func TestActivitiesForUsersRequiresAtLeastOneXUID(t *testing.T) {
 	requests := 0
 	client := &Client{
@@ -57,8 +76,8 @@ func TestActivitiesForUsersRequiresAtLeastOneXUID(t *testing.T) {
 	}
 
 	_, err := client.ActivitiesForUsers(context.Background(), uuid.New(), nil)
-	if err == nil || err.Error() != "mpsd: activities for users requires at least one xuid" {
-		t.Fatalf("ActivitiesForUsers error = %v, want xuid validation error", err)
+	if !errors.Is(err, errActivitiesRequiresXUID) {
+		t.Fatalf("ActivitiesForUsers error = %v, want %v", err, errActivitiesRequiresXUID)
 	}
 	if requests != 0 {
 		t.Fatalf("requests = %d, want 0", requests)
@@ -70,7 +89,7 @@ func TestActivitiesForUsersEncodesOnlyXUIDFilter(t *testing.T) {
 	xuids := []string{"123", "456"}
 	client := &Client{
 		client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			defer req.Body.Close()
+			defer func() { _ = req.Body.Close() }()
 			if err := json.NewDecoder(req.Body).Decode(&requestBody); err != nil {
 				t.Fatalf("decode request body: %v", err)
 			}

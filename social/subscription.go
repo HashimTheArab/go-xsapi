@@ -110,10 +110,11 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 		}
 
 		h.subscriptionMu.RLock()
-		for _, handler := range h.subscriptionHandlers {
+		handlers := slices.Clone(h.subscriptionHandlers)
+		h.subscriptionMu.RUnlock()
+		for _, handler := range handlers {
 			handler.HandleIncomingFriendRequestCountChange(*data.Count)
 		}
-		h.subscriptionMu.RUnlock()
 		return
 	case NotificationTypeAdded, NotificationTypeRemoved, NotificationTypeChanged:
 		if len(data.XUIDs) == 0 {
@@ -124,10 +125,11 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 		}
 
 		h.subscriptionMu.RLock()
-		for _, handler := range h.subscriptionHandlers {
+		handlers := slices.Clone(h.subscriptionHandlers)
+		h.subscriptionMu.RUnlock()
+		for _, handler := range handlers {
 			handler.HandleSocialNotification(data.Type, slices.Clone(data.XUIDs))
 		}
-		h.subscriptionMu.RUnlock()
 	default:
 		h.log.Warn("unexpected subscription notification type",
 			slog.String("type", data.Type),

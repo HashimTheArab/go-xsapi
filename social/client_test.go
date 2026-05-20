@@ -2,6 +2,7 @@ package social
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"testing"
@@ -265,6 +266,52 @@ func TestSubscriptionHandlerHandleReconnectErrorPreservesHandlers(t *testing.T) 
 	}
 }
 
+func TestSubscriptionHandlerDoesNotHoldLockWhileCallingHandlers(t *testing.T) {
+	client := &Client{
+		sub:          &fakeSubscriber{},
+		subscription: &rta.Subscription{},
+		log:          slogDiscard(),
+	}
+	done := make(chan error, 1)
+	client.subscriptionHandlers = []SubscriptionHandler{
+		subscribeOnNotificationHandler{client: client, done: done},
+	}
+	handler := &subscriptionHandler{Client: client}
+
+	handleDone := make(chan struct{})
+	go func() {
+		payload, err := json.Marshal(struct {
+			Type  string   `json:"NotificationType"`
+			XUIDs []string `json:"Xuids"`
+		}{
+			Type:  NotificationTypeAdded,
+			XUIDs: []string{"2533274799999999"},
+		})
+		if err != nil {
+			t.Errorf("marshal payload: %v", err)
+			close(handleDone)
+			return
+		}
+		handler.HandleEvent(payload)
+		close(handleDone)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Subscribe from handler returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("handler callback blocked trying to resubscribe")
+	}
+
+	select {
+	case <-handleDone:
+	case <-time.After(time.Second):
+		t.Fatal("HandleEvent did not return after handler callback completed")
+	}
+}
+
 func TestClientSubscribeDuplicatesComparableHandlerWithLiveSubscription(t *testing.T) {
 	handler := NopSubscriptionHandler{}
 	client := &Client{
@@ -487,6 +534,17 @@ type namedHandler string
 
 func (namedHandler) HandleSocialNotification(string, []string)  {}
 func (namedHandler) HandleIncomingFriendRequestCountChange(int) {}
+
+type subscribeOnNotificationHandler struct {
+	client *Client
+	done   chan<- error
+}
+
+func (h subscribeOnNotificationHandler) HandleSocialNotification(string, []string) {
+	h.done <- h.client.Subscribe(context.Background(), NopSubscriptionHandler{})
+}
+
+func (subscribeOnNotificationHandler) HandleIncomingFriendRequestCountChange(int) {}
 
 type pointerHandler struct{ id string }
 

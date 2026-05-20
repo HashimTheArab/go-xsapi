@@ -25,6 +25,11 @@ import (
 	"golang.org/x/oauth2"
 )
 
+var (
+	errDeviceTokenAbsent = errors.New("xal/sisu: device token is absent")
+	errProofKeyAbsent    = errors.New("xal/sisu: proof key is absent")
+)
+
 // New creates a new Session using src as the [oauth2.TokenSource] that provides Microsoft
 // Account (MSA) access tokens. If sc is non nil, it will be used to customize session behavior,
 // including resuming from a previous Session using a Snapshot.
@@ -323,9 +328,16 @@ func (s *Session) authorize(ctx context.Context) (*authorizationResponse, error)
 	if err != nil {
 		return nil, fmt.Errorf("xal/sisu: request device token for authorization: %w", err)
 	}
+	if device == nil || device.Token == "" {
+		return nil, errDeviceTokenAbsent
+	}
 	token, err := s.msa.Token()
 	if err != nil {
 		return nil, fmt.Errorf("xal/sisu: request access token for authorization: %w", err)
+	}
+	proofKey := s.ProofKey()
+	if proofKey == nil {
+		return nil, errProofKeyAbsent
 	}
 
 	td, err := nsal.Default(ctx)
@@ -343,7 +355,7 @@ func (s *Session) authorize(ctx context.Context) (*authorizationResponse, error)
 		UseModernGamerTag: true,
 		SiteName:          "user.auth.xboxlive.com",
 		RelyingParty:      defaultRelyingParty,
-		ProofKey:          internal.ProofKey(s.ProofKey()),
+		ProofKey:          internal.ProofKey(proofKey),
 	}); err != nil {
 		return nil, fmt.Errorf("encode request body: %w", err)
 	}
@@ -358,7 +370,7 @@ func (s *Session) authorize(ctx context.Context) (*authorizationResponse, error)
 	if !ok {
 		return nil, fmt.Errorf("xal/sisu: NSAL title endpoint not found for %q", req.URL)
 	}
-	if err := policy.Sign(req, buf.Bytes(), s.ProofKey(), timestamp.Now()); err != nil {
+	if err := policy.Sign(req, buf.Bytes(), proofKey, timestamp.Now()); err != nil {
 		return nil, fmt.Errorf("xal/sisu: sign request: %w", err)
 	}
 
@@ -394,7 +406,7 @@ func (s *Session) authorize(ctx context.Context) (*authorizationResponse, error)
 				code := ErrorCode(n)
 				//noinspection GoDirectComparisonOfErrors
 				if code == ErrorCodeAccountCreationRequired {
-					acct, err := accountCreationRequired(resp, device, s.ProofKey())
+					acct, err := accountCreationRequired(resp, device, proofKey)
 					if err != nil {
 						errs = append(errs, fmt.Errorf("generate account creation URL: %w", err))
 					} else {
@@ -508,7 +520,7 @@ func (c ErrorCode) String() (s string) {
 	case ErrorCodeAccountNameChangeRequired:
 		s = "Your gamertag is no longer valid. Please follow the steps at https://support.xbox.com/en-us/help/account-profile/profile/change-xbox-live-gamertag and choose a new one to continue"
 	case ErrorCodeSignInCountByDeviceTypeExceeded:
-		s = "You are already signed in on the maximum number of devices of this type. Sign out from another devie and try again"
+		s = "You are already signed in on the maximum number of devices of this type. Sign out from another device and try again"
 	case ErrorCodeTitleSinglePointOfPresenceViolated:
 		s = "You are already signed in to this title on another device. Sign out from another device and try again"
 	default:
@@ -597,7 +609,7 @@ type AccountCreationRequiredError struct {
 
 // Error implements the error interface.
 func (e *AccountCreationRequiredError) Error() string {
-	return fmt.Sprintf("xal/sisu: Xbox Live account not linked to Microsoft Account, sign up at: %s", e.SignupURL)
+	return "xal/sisu: Xbox Live account not linked to Microsoft Account; inspect AccountCreationRequiredError.SignupURL to continue account creation"
 }
 
 // defaultRelyingParty is the default relying party desired on the Authorization Token present in

@@ -527,7 +527,7 @@ func (c *Conn) reconnect(done chan struct{}) {
 		}
 		if c.reconnectWaveStable(readerDone) {
 			for i, subscription := range successes {
-				go c.notifyReconnectReadyAfterSuccess(subscription, successDone[i])
+				go c.notifyReconnectReadyAfterSuccess(subscription, successDone[i], readerDone)
 			}
 			return
 		}
@@ -726,9 +726,12 @@ func (c *Conn) notifyReconnectReady(subscription *Subscription) {
 
 // notifyReconnectReadyAfterSuccess waits for the reconnect-success callback to
 // return before firing the ready callback for the same subscription.
-func (c *Conn) notifyReconnectReadyAfterSuccess(subscription *Subscription, successDone <-chan struct{}) {
+func (c *Conn) notifyReconnectReadyAfterSuccess(subscription *Subscription, successDone <-chan struct{}, readerDone chan struct{}) {
 	if successDone != nil {
 		<-successDone
+	}
+	if c.ctx.Err() != nil || !c.reconnectWaveStable(readerDone) {
+		return
 	}
 	c.notifyReconnectReady(subscription)
 }

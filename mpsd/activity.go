@@ -13,10 +13,18 @@ import (
 	"github.com/google/uuid"
 )
 
+var (
+	errActivitiesRequiresCallerXUID = errors.New("mpsd: activities requires caller XUID")
+	errActivitiesRequiresXUID       = errors.New("mpsd: activities for users requires at least one xuid")
+)
+
 // Activities returns activity handles for open multiplayer sessions in the
 // caller's "people" social group for the specified Service Configuration ID
 // (SCID).
 func (c *Client) Activities(ctx context.Context, scid uuid.UUID, opts ...internal.RequestOption) ([]ActivityHandle, error) {
+	if c.userInfo.XUID == "" {
+		return nil, errActivitiesRequiresCallerXUID
+	}
 	return c.activities(ctx, scid, searchRequestOwners{
 		People: &searchRequestPeople{
 			SocialGroup:     "people",
@@ -30,7 +38,7 @@ func (c *Client) Activities(ctx context.Context, scid uuid.UUID, opts ...interna
 // The Service Configuration ID (SCID) identifies the game to query.
 func (c *Client) ActivitiesForUsers(ctx context.Context, scid uuid.UUID, xuids []string, opts ...internal.RequestOption) ([]ActivityHandle, error) {
 	if len(xuids) == 0 {
-		return nil, errors.New("mpsd: activities for users requires at least one xuid")
+		return nil, errActivitiesRequiresXUID
 	}
 	return c.activities(ctx, scid, searchRequestOwners{XUIDs: xuids}, opts...)
 }
