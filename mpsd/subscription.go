@@ -232,8 +232,10 @@ func (h *subscriptionHandler) HandleEvent(custom json.RawMessage) {
 	h.sessionsMu.RLock()
 	sessions := make([]*Session, 0, len(h.sessions))
 	for _, session := range h.sessions {
-		if slices.ContainsFunc(refs, func(ref SessionReference) bool {
-			return ref.Equal(session.Reference())
+		if slices.ContainsFunc(refs, func(reference SessionReference) bool {
+			// Shoulder taps may deliver TemplateName and Name in lowercase,
+			// so use case-insensitive matching.
+			return reference.Equal(session.Reference())
 		}) {
 			sessions = append(sessions, session)
 		}
