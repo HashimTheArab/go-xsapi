@@ -3,6 +3,7 @@ package sisu
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -52,6 +53,16 @@ func TestTokenSourceRefreshErrorIncludesOAuthBody(t *testing.T) {
 	if got := err.Error(); !strings.Contains(got, "invalid_grant: refresh expired") {
 		t.Fatalf("error = %q, want OAuth body detail", got)
 	}
+	var statusErr *xal.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("error does not wrap xal.StatusError: %v", err)
+	}
+	if statusErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want %d", statusErr.StatusCode, http.StatusBadRequest)
+	}
+	if statusErr.Detail != "invalid_grant: refresh expired" {
+		t.Fatalf("detail = %q, want OAuth body detail", statusErr.Detail)
+	}
 }
 
 func TestExchangeUsesXALContextClient(t *testing.T) {
@@ -91,7 +102,7 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func response(status int, body string) *http.Response {
 	return &http.Response{
 		StatusCode: status,
-		Status:     http.StatusText(status),
+		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
 		Header:     make(http.Header),
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}

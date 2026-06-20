@@ -390,7 +390,7 @@ func (s *Session) authorize(ctx context.Context) (*authorizationResponse, error)
 		return r, nil
 	default:
 		errs := []error{
-			fmt.Errorf("%s %s: %s", req.Method, req.URL, resp.Status),
+			xal.UnexpectedStatus(resp),
 			wwwAuthenticate(resp.Header),
 		}
 		xerr := resp.Header.Get("X-Err")

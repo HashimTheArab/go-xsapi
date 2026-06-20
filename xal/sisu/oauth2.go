@@ -130,7 +130,9 @@ func (tf *tokenRefresher) Token() (*oauth2.Token, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		return nil, fmt.Errorf("POST %s: %s%s", tf.conf.oauth2().Endpoint.TokenURL, resp.Status, oauth2ErrorBody(body))
+		err := xal.UnexpectedStatus(resp)
+		err.Detail = oauth2ErrorDetail(body)
+		return nil, err
 	}
 	var tk *oauth2.Token
 	if err := json.NewDecoder(resp.Body).Decode(&tk); err != nil {
@@ -156,10 +158,10 @@ func (tf *tokenRefresher) Token() (*oauth2.Token, error) {
 	return tk, nil
 }
 
-// oauth2ErrorBody formats OAuth error response bodies for appending to an
-// existing HTTP status error. It prefers the OAuth error fields when present and
-// falls back to the trimmed raw body. An empty body returns an empty string.
-func oauth2ErrorBody(body []byte) string {
+// oauth2ErrorDetail formats OAuth error response bodies for appending to an
+// HTTP status error. It prefers the OAuth error fields when present and falls
+// back to the trimmed raw body. An empty body returns an empty string.
+func oauth2ErrorDetail(body []byte) string {
 	detail := strings.TrimSpace(string(body))
 	if detail == "" {
 		return ""
@@ -178,7 +180,7 @@ func oauth2ErrorBody(body []byte) string {
 			detail = response.ErrorDescription
 		}
 	}
-	return ": " + detail
+	return detail
 }
 
 // AuthCodeURL returns a URL to Microsoft's title-themed page that asks
@@ -270,7 +272,7 @@ func (conf Config) AuthCodeURL(ctx context.Context, device xasd.TokenSource, sta
 	timestamp.Update(resp.Header)
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s %s: %s", req.Method, req.URL, resp.Status)
+		return "", xal.UnexpectedStatus(resp)
 	}
 	var respBody *authCodeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&respBody); err != nil {
