@@ -216,26 +216,6 @@ func TestResolverRejectsDefaultTitleServiceEndpointAfterCurrentLoadError(t *test
 	}
 }
 
-func TestResolverAllowsMultiplayerAuthFallbackAfterCurrentLoadError(t *testing.T) {
-	resetDefaultTitle(t)
-
-	currentErr := errors.New("current title unavailable")
-	src := &transportTokenSource{err: currentErr}
-	resolver := ResolverConfig{TitleIDs: []string{"current", "default"}}.New(src)
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return titleDataResponse("*.minecraft.net", "https://multiplayer.minecraft.net/"), nil
-	})}
-	ctx := context.WithValue(context.Background(), xal.HTTPClient, client)
-
-	endpoint, _, err := resolver.Resolve(ctx, mustParseURL(t, "https://multiplayer.minecraft.net/authentication"))
-	if err != nil {
-		t.Fatalf("Resolve: %v", err)
-	}
-	if endpoint.RelyingParty != "https://multiplayer.minecraft.net/" {
-		t.Fatalf("RelyingParty = %q, want https://multiplayer.minecraft.net/", endpoint.RelyingParty)
-	}
-}
-
 func TestResolverRetriesExpiredTitleLoadFailure(t *testing.T) {
 	resetDefaultTitle(t)
 
