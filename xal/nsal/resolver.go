@@ -123,7 +123,7 @@ func (r *Resolver) Resolve(ctx context.Context, u *url.URL) (endpoint Endpoint, 
 			// title service endpoints are configured per title. If a higher
 			// precedence title source failed to load, a lower-precedence
 			// title-service match may carry the wrong relying party.
-			if len(errs) != 0 && endpoint.RelyingParty != internal.XBLRelyingParty {
+			if len(errs) != 0 && endpoint.RelyingParty != internal.XBLRelyingParty && !allowFallbackAfterTitleLoadError(u, endpoint) {
 				return endpoint, policy, fmt.Errorf("no endpoint was found for %s: %w", u, errors.Join(errs...))
 			}
 			return endpoint, policy, nil
@@ -133,6 +133,14 @@ func (r *Resolver) Resolve(ctx context.Context, u *url.URL) (endpoint Endpoint, 
 		return endpoint, policy, fmt.Errorf("no endpoint was found for %s: %w", u, err)
 	}
 	return endpoint, policy, fmt.Errorf("no endpoint was found for %s", u)
+}
+
+// allowFallbackAfterTitleLoadError reports whether a default title-data match is
+// safe to use after higher-precedence title data failed to load.
+func allowFallbackAfterTitleLoadError(u *url.URL, endpoint Endpoint) bool {
+	return u.Scheme == "https" &&
+		u.Hostname() == "multiplayer.minecraft.net" &&
+		endpoint.RelyingParty == "https://multiplayer.minecraft.net/"
 }
 
 // TokenAndSignature resolves an XSTS token and signature policy for the given URL.
