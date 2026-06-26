@@ -12,18 +12,13 @@ type StatusError struct {
 	URL        string
 	Status     string
 	StatusCode int
-	Detail     string
 }
 
 func (e *StatusError) Error() string {
 	if e == nil {
 		return "<nil>"
 	}
-	msg := fmt.Sprintf("%s %s: %s", e.Method, e.URL, e.Status)
-	if e.Detail != "" {
-		msg += ": " + e.Detail
-	}
-	return msg
+	return fmt.Sprintf("%s %s: %s", e.Method, e.URL, e.Status)
 }
 
 // UnexpectedStatus returns a StatusError for resp.
