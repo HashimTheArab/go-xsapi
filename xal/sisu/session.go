@@ -159,6 +159,33 @@ type Session struct {
 
 	// client is the HTTP client used to make authentication requests.
 	client *http.Client
+
+	// cluster is the SISU cluster host advertised by the Cluster Affinity
+	// header of the last signin response. When set, follow-up SISU requests are
+	// routed to this host instead of the default endpoint. It is nil until a
+	// valid https Cluster Affinity header is observed.
+	//
+	// It is guarded by respMu, which is held whenever a SISU authorize request
+	// is in flight (the only writer) and whenever cluster routing is consulted
+	// for a follow-up SISU request.
+	cluster *url.URL
+}
+
+// setCluster records the SISU cluster host that follow-up requests should be
+// routed to. A nil host clears any previous affinity, falling back to the
+// default endpoint. Callers must hold respMu.
+func (s *Session) setCluster(host *url.URL) {
+	s.cluster = host
+}
+
+// endpoint returns the base URL for SISU requests, honouring a recorded Cluster
+// Affinity host when present and falling back to the default endpoint
+// otherwise. Callers must hold respMu when consulting cluster routing.
+func (s *Session) endpoint() *url.URL {
+	if s.cluster != nil {
+		return s.cluster
+	}
+	return endpoint
 }
 
 // DeviceToken returns an XASD (Xbox Authentication Services for Device) token.
@@ -341,36 +368,14 @@ func (s *Session) authorize(ctx context.Context) (*authorizationResponse, error)
 		return nil, fmt.Errorf("xal/sisu: resolve NSAL default title endpoints: %w", err)
 	}
 
-	buf := &bytes.Buffer{}
-	defer buf.Reset()
-	if err := json.NewEncoder(buf).Encode(&authorizationRequest{
-		AccessToken:       "t=" + token.AccessToken,
-		ClientID:          s.config.ClientID,
-		DeviceToken:       device.Token,
-		Sandbox:           s.config.Sandbox,
-		UseModernGamerTag: true,
-		SiteName:          "user.auth.xboxlive.com",
-		RelyingParty:      defaultRelyingParty,
-		ProofKey:          internal.ProofKey(proofKey),
-	}); err != nil {
-		return nil, fmt.Errorf("encode request body: %w", err)
-	}
-
-	requestURL := endpoint.JoinPath("authorize").String()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	req.Header.Set("User-Agent", s.config.UserAgent)
-	_, policy, ok := td.Match(req.URL)
-	if !ok {
-		return nil, fmt.Errorf("xal/sisu: NSAL title endpoint not found for %q", req.URL)
-	}
-	if err := policy.Sign(req, buf.Bytes(), proofKey, timestamp.Now()); err != nil {
-		return nil, fmt.Errorf("xal/sisu: sign request: %w", err)
-	}
-
-	resp, err := s.client.Do(req)
+	// Each attempt rebuilds, re-signs and re-sends the request against the
+	// current SISU endpoint (which may be a cluster host advertised by a prior
+	// signin response). authorizeWithRetry retries a single time when the
+	// response carries a retryable X-Err code (for example SPOP), mirroring the
+	// real client's "Retrying GetSisuTokens".
+	resp, err := s.authorizeWithRetry(ctx, func(ctx context.Context) (*http.Response, error) {
+		return s.sendAuthorize(ctx, td, device, token, proofKey)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -379,6 +384,14 @@ func (s *Session) authorize(ctx context.Context) (*authorizationResponse, error)
 
 	switch resp.StatusCode {
 	case http.StatusOK:
+		// Route follow-up SISU requests to the cluster host advertised by the
+		// signin response, if present and valid.
+		cluster, err := clusterAffinity(resp.Header)
+		if err != nil {
+			return nil, err
+		}
+		s.setCluster(cluster)
+
 		var r *authorizationResponse
 		if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 			return nil, fmt.Errorf("decode response body: %w", err)
@@ -414,6 +427,41 @@ func (s *Session) authorize(ctx context.Context) (*authorizationResponse, error)
 		}
 		return nil, errors.Join(errs...)
 	}
+}
+
+// sendAuthorize builds, signs and sends a single SISU authorize request. The
+// request is routed to the current SISU endpoint, which may be a cluster host
+// previously advertised via the Cluster Affinity header. The returned response
+// body is left open for the caller to read.
+func (s *Session) sendAuthorize(ctx context.Context, td *nsal.TitleData, device *xasd.Token, token *oauth2.Token, proofKey *ecdsa.PrivateKey) (*http.Response, error) {
+	buf := &bytes.Buffer{}
+	if err := json.NewEncoder(buf).Encode(&authorizationRequest{
+		AccessToken:       "t=" + token.AccessToken,
+		ClientID:          s.config.ClientID,
+		DeviceToken:       device.Token,
+		Sandbox:           s.config.Sandbox,
+		UseModernGamerTag: true,
+		SiteName:          "user.auth.xboxlive.com",
+		RelyingParty:      defaultRelyingParty,
+		ProofKey:          internal.ProofKey(proofKey),
+	}); err != nil {
+		return nil, fmt.Errorf("encode request body: %w", err)
+	}
+
+	requestURL := s.endpoint().JoinPath("authorize").String()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, buf)
+	if err != nil {
+		return nil, fmt.Errorf("make request: %w", err)
+	}
+	req.Header.Set("User-Agent", s.config.UserAgent)
+	_, policy, ok := td.Match(req.URL)
+	if !ok {
+		return nil, fmt.Errorf("xal/sisu: NSAL title endpoint not found for %q", req.URL)
+	}
+	if err := policy.Sign(req, buf.Bytes(), proofKey, timestamp.Now()); err != nil {
+		return nil, fmt.Errorf("xal/sisu: sign request: %w", err)
+	}
+	return s.client.Do(req)
 }
 
 // wwwAuthenticate returns an error wrapping the value fo the 'WWW-Authenticate' response header,
