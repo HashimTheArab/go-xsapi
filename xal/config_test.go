@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 )
 
 func TestContextClientDefaultHasTimeout(t *testing.T) {
@@ -11,8 +12,8 @@ func TestContextClientDefaultHasTimeout(t *testing.T) {
 	if client == http.DefaultClient {
 		t.Fatal("client = http.DefaultClient, want bounded default client")
 	}
-	if client.Timeout != defaultHTTPClientTimeout {
-		t.Fatalf("client timeout = %v, want %v", client.Timeout, defaultHTTPClientTimeout)
+	if client.Timeout != 30*time.Second {
+		t.Fatalf("client timeout = %v, want %v", client.Timeout, 30*time.Second)
 	}
 }
 
