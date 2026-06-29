@@ -219,6 +219,11 @@ func (c *Conn) call(ctx context.Context, op uint8, payload []any) (*response, er
 // connection is still allowed to reconnect and retry the operation.
 var errConnectionInterrupted = errors.New("rta: connection interrupted")
 
+var (
+	pingInterval = 30 * time.Second
+	pingTimeout  = 10 * time.Second
+)
+
 func NewSubscription(resourceURI string, h SubscriptionHandler) *Subscription {
 	sub := &Subscription{resourceURI: resourceURI}
 	sub.Handle(h)
@@ -464,7 +469,7 @@ func (c *Conn) read(conn *websocket.Conn) {
 // ping sends periodic WebSocket pings to keep the connection alive. The Xbox
 // RTA service drops idle connections after ~45 seconds.
 func (c *Conn) ping(conn *websocket.Conn) {
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -472,10 +477,14 @@ func (c *Conn) ping(conn *websocket.Conn) {
 			if !c.isCurrentConn(conn) {
 				return
 			}
-			ctx, cancel := context.WithTimeout(c.ctx, 10*time.Second)
+			ctx, cancel := context.WithTimeout(c.ctx, pingTimeout)
 			err := conn.Ping(ctx)
 			cancel()
 			if err != nil {
+				if c.isCurrentConn(conn) && c.ctx.Err() == nil {
+					c.log.Warn("WebSocket ping failed; reconnecting", slog.Any("error", err))
+					c.startReconnect()
+				}
 				return
 			}
 		case <-c.ctx.Done():
