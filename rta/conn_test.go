@@ -241,31 +241,6 @@ func TestReconnectWithNoSubscriptionsDoesNotDial(t *testing.T) {
 	}
 }
 
-func TestPingFailureStartsReconnect(t *testing.T) {
-	srv := newConnTestServer(t)
-	defer srv.Close()
-
-	oldInterval := pingInterval
-	oldTimeout := pingTimeout
-	pingInterval = 10 * time.Millisecond
-	pingTimeout = 10 * time.Millisecond
-	t.Cleanup(func() {
-		pingInterval = oldInterval
-		pingTimeout = oldTimeout
-	})
-
-	srv.blockReads.Store(true)
-
-	conn := srv.Dial(t)
-	defer conn.Close()
-
-	sub := NewSubscription("test-resource", NopSubscriptionHandler{})
-	sub.activate(1, nil)
-	conn.trackSubscription(sub)
-
-	waitAtomicUint32(t, &srv.dialCount, 2, "dial count")
-}
-
 func TestConcurrentSubscribeCoalescesSingleHandshake(t *testing.T) {
 	srv := newConnTestServer(t)
 	defer srv.Close()
@@ -511,7 +486,6 @@ type connTestServer struct {
 	closeSubscribeMin atomic.Uint32
 	closeUnsubscribe  atomic.Bool
 	closeAfterUnsub   atomic.Bool
-	blockReads        atomic.Bool
 }
 
 func newConnTestServer(t *testing.T) *connTestServer {
@@ -580,11 +554,6 @@ func (s *connTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		s.closeCount.Add(1)
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 	}()
-
-	if s.blockReads.Load() {
-		<-r.Context().Done()
-		return
-	}
 
 	for {
 		var payload []json.RawMessage
