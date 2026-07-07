@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"slices"
 
 	"github.com/df-mc/go-xsapi/v2/rta"
@@ -36,6 +37,49 @@ func (c *Client) Subscribe(ctx context.Context, h SubscriptionHandler) (err erro
 	}
 
 	c.subscriptionHandlers = append(c.subscriptionHandlers, h)
+	return nil
+}
+
+// Unsubscribe removes a handler previously registered with [Client.Subscribe].
+// Handlers are matched by identity, so h must be comparable and equal to the
+// value passed to Subscribe; a non-comparable h returns an error rather than
+// panicking. It is a no-op if h is not currently registered.
+//
+// When the last handler is removed, the shared RTA subscription is torn down so
+// the connection stops receiving events for the resource. Handlers registered
+// by other callers on the same Client are left untouched, unlike
+// [Client.CloseContext], which clears every handler.
+//
+// Unsubscribe returns an error if h is nil.
+func (c *Client) Unsubscribe(ctx context.Context, h SubscriptionHandler) error {
+	if h == nil {
+		return errors.New("xsapi/social: cannot unsubscribe a nil SubscriptionHandler")
+	}
+	if !reflect.TypeOf(h).Comparable() {
+		return errors.New("xsapi/social: SubscriptionHandler must be comparable to be unsubscribed")
+	}
+
+	c.subscriptionMu.Lock()
+	defer c.subscriptionMu.Unlock()
+
+	// h is comparable, so existing == h never panics: a differing dynamic type
+	// compares unequal, and an identical type is comparable.
+	idx := slices.IndexFunc(c.subscriptionHandlers, func(existing SubscriptionHandler) bool {
+		return existing == h
+	})
+	if idx < 0 {
+		return nil
+	}
+	c.subscriptionHandlers = slices.Delete(c.subscriptionHandlers, idx, idx+1)
+	if len(c.subscriptionHandlers) > 0 {
+		return nil
+	}
+	// The last handler is gone; release the shared RTA subscription. A never-
+	// active subscription (no RTA connection) reports ErrUnavailable, which is
+	// not a failure to unsubscribe.
+	if err := c.unsubscriber.Unsubscribe(ctx, c.subscription); err != nil && !errors.Is(err, rta.ErrUnavailable) {
+		return err
+	}
 	return nil
 }
 
