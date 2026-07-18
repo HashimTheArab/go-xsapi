@@ -153,6 +153,29 @@ func TestRelationshipMethodsAcceptCreated(t *testing.T) {
 	}
 }
 
+func TestBulkAddFriendsCompatibility(t *testing.T) {
+	client := New(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost {
+			t.Fatalf("Method = %q, want POST", req.Method)
+		}
+		if req.URL.Path != "/bulk/users/me/people/friends/v2" {
+			t.Fatalf("Path = %q, want bulk friends path", req.URL.Path)
+		}
+		if got := req.URL.Query().Get("method"); got != "add" {
+			t.Fatalf("method = %q, want add", got)
+		}
+		return response(req, http.StatusOK, `{"updatedPeople":["123"]}`), nil
+	})}, nil, xsts.UserInfo{}, nil)
+
+	updated, err := client.BulkAddFriends(context.Background(), []string{"123"})
+	if err != nil {
+		t.Fatalf("BulkAddFriends returned error: %v", err)
+	}
+	if len(updated) != 1 || updated[0] != "123" {
+		t.Fatalf("updated people = %v, want [123]", updated)
+	}
+}
+
 func TestResponseErrorMatchesCategories(t *testing.T) {
 	tests := []struct {
 		name   string

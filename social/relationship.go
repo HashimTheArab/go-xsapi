@@ -148,6 +148,13 @@ func (c *Client) AddFriends(ctx context.Context, xuids []string, opts ...interna
 	}
 }
 
+// BulkAddFriends creates or accepts friend relationships in a single request.
+//
+// Deprecated: Use [Client.AddFriends].
+func (c *Client) BulkAddFriends(ctx context.Context, xuids []string, opts ...internal.RequestOption) ([]string, error) {
+	return c.AddFriends(ctx, xuids, opts...)
+}
+
 type (
 	// bulkFriendsRequest is the wire representation of a bulk friend mutation
 	// request body.
