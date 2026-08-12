@@ -155,7 +155,10 @@ func (c *Client) Update(ctx context.Context, notifications []Notification, typ s
 		Items:      items,
 		Timestamp:  timestamp,
 		UpdateType: typ,
-	}, append(opts, contractVersion))
+	}, append(opts,
+		contractVersion,
+		internal.RequestHeader("Content-Type", "application/json"),
+	))
 	if err != nil {
 		return fmt.Errorf("make request: %w", err)
 	}
