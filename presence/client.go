@@ -211,6 +211,35 @@ func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...inter
 	}
 }
 
+// KeepAlive updates the authenticated user's current title presence and
+// repeats the update after each delay requested by the Presence API. It
+// returns when the context is canceled, an update fails, or the server does
+// not request another heartbeat.
+//
+// KeepAlive does not retry failed updates. Callers that need retry or logging
+// policy should implement it around this method.
+func (c *Client) KeepAlive(ctx context.Context, request TitleRequest, opts ...internal.RequestOption) error {
+	for {
+		result, err := c.Update(ctx, request, opts...)
+		if err != nil {
+			return err
+		}
+		if result.HeartbeatAfter <= 0 {
+			return nil
+		}
+
+		timer := time.NewTimer(result.HeartbeatAfter)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		}
+	}
+}
+
 // heartbeatAfter parses the X-Heartbeat-After header value as seconds.
 func heartbeatAfter(header string) time.Duration {
 	seconds, err := strconv.Atoi(header)

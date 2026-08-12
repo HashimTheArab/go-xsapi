@@ -140,3 +140,73 @@ func TestUpdateReturnsResult(t *testing.T) {
 		})
 	}
 }
+
+func TestKeepAliveUsesServerHeartbeat(t *testing.T) {
+	var posts atomic.Int32
+	client := New(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method == http.MethodDelete {
+			return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+		}
+		if req.Method != http.MethodPost {
+			return nil, fmt.Errorf("unexpected method %s", req.Method)
+		}
+		header := make(http.Header)
+		if posts.Add(1) == 1 {
+			header.Set("X-Heartbeat-After", "1")
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     header,
+			Body:       http.NoBody,
+			Request:    req,
+		}, nil
+	})}, xsts.UserInfo{XUID: "1234"})
+
+	if err := client.KeepAlive(context.Background(), TitleRequest{State: StateActive}); err != nil {
+		t.Fatalf("KeepAlive returned error: %v", err)
+	}
+	if got := posts.Load(); got != 2 {
+		t.Fatalf("POST requests = %d, want 2", got)
+	}
+	if err := client.CloseContext(context.Background()); err != nil {
+		t.Fatalf("CloseContext returned error: %v", err)
+	}
+}
+
+func TestKeepAliveStopsWhileWaitingWhenContextCanceled(t *testing.T) {
+	updated := make(chan struct{})
+	var posts atomic.Int32
+	client := New(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		posts.Add(1)
+		select {
+		case <-updated:
+		default:
+			close(updated)
+		}
+		header := make(http.Header)
+		header.Set("X-Heartbeat-After", "60")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Header:     header,
+			Body:       http.NoBody,
+			Request:    req,
+		}, nil
+	})}, xsts.UserInfo{XUID: "1234"})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- client.KeepAlive(ctx, TitleRequest{State: StateActive})
+	}()
+	<-updated
+	cancel()
+
+	if err := <-errCh; err != context.Canceled {
+		t.Fatalf("KeepAlive error = %v, want context.Canceled", err)
+	}
+	if got := posts.Load(); got != 1 {
+		t.Fatalf("POST requests = %d, want 1", got)
+	}
+}
