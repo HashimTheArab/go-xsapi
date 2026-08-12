@@ -28,6 +28,7 @@ type Client struct {
 	userInfo      xsts.UserInfo
 	lifecycleMu   sync.Mutex
 	shouldCleanup bool
+	keepAliveDone chan struct{}
 }
 
 // Current returns the caller's current presence. Unlike [PresenceByXUID],
@@ -109,6 +110,7 @@ func (c *Client) Close() error {
 func (c *Client) CloseContext(ctx context.Context) error {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
+	c.stopKeepAlive()
 	if c.shouldCleanup {
 		return c.remove(ctx)
 	}
@@ -153,7 +155,18 @@ const (
 func (c *Client) Remove(ctx context.Context, opts ...internal.RequestOption) error {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
+	c.stopKeepAlive()
 	return c.remove(ctx, opts...)
+}
+
+// stopKeepAlive stops keepalive loops that started before this call. The
+// replacement channel permits the Client to be used for a later lifecycle.
+// lifecycleMu must be held by the caller.
+func (c *Client) stopKeepAlive() {
+	if c.keepAliveDone != nil {
+		close(c.keepAliveDone)
+	}
+	c.keepAliveDone = make(chan struct{})
 }
 
 func (c *Client) remove(ctx context.Context, opts ...internal.RequestOption) error {
@@ -180,6 +193,11 @@ func (c *Client) remove(ctx context.Context, opts ...internal.RequestOption) err
 func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...internal.RequestOption) (*UpdateResult, error) {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
+	return c.update(ctx, request, opts)
+}
+
+// update performs an Update while lifecycleMu is held by the caller.
+func (c *Client) update(ctx context.Context, request TitleRequest, opts []internal.RequestOption) (*UpdateResult, error) {
 	requestURL := endpoint.JoinPath(
 		"users",
 		"xuid("+c.userInfo.XUID+")",
@@ -219,8 +237,27 @@ func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...inter
 // KeepAlive does not retry failed updates. Callers that need retry or logging
 // policy should implement it around this method.
 func (c *Client) KeepAlive(ctx context.Context, request TitleRequest, opts ...internal.RequestOption) error {
+	c.lifecycleMu.Lock()
+	if c.keepAliveDone == nil {
+		c.keepAliveDone = make(chan struct{})
+	}
+	done := c.keepAliveDone
+	c.lifecycleMu.Unlock()
+
 	for {
-		result, err := c.Update(ctx, request, opts...)
+		c.lifecycleMu.Lock()
+		if err := ctx.Err(); err != nil {
+			c.lifecycleMu.Unlock()
+			return err
+		}
+		select {
+		case <-done:
+			c.lifecycleMu.Unlock()
+			return nil
+		default:
+		}
+		result, err := c.update(ctx, request, opts)
+		c.lifecycleMu.Unlock()
 		if err != nil {
 			return err
 		}
@@ -236,6 +273,11 @@ func (c *Client) KeepAlive(ctx context.Context, request TitleRequest, opts ...in
 				<-timer.C
 			}
 			return ctx.Err()
+		case <-done:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
 		}
 	}
 }
