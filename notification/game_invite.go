@@ -57,6 +57,24 @@ type (
 	}
 )
 
+// UnmarshalJSON decodes both the common notification fields and the
+// game-invite-specific options.
+func (i *GameInvite) UnmarshalJSON(b []byte) error {
+	var common notification[GameInviteAction]
+	if err := json.Unmarshal(b, &common); err != nil {
+		return err
+	}
+	var specific struct {
+		Options GameInviteOptions `json:"NotificationOptions"`
+	}
+	if err := json.Unmarshal(b, &specific); err != nil {
+		return err
+	}
+	i.notification = common
+	i.Options = specific.Options
+	return nil
+}
+
 // UnmarshalJSON decodes the given JSON data into GameInviteLaunchInfo.
 func (i *GameInviteLaunchInfo) UnmarshalJSON(b []byte) error {
 	type Alias GameInviteLaunchInfo
