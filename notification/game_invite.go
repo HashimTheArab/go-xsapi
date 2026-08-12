@@ -31,7 +31,7 @@ type (
 
 	// GameInviteOptions represents the options for a GameInvite notification.
 	GameInviteOptions struct {
-		// Location describes the title ta which the invite could be accepted.
+		// Location describes the title at which the invite could be accepted.
 		// To accept invitations for a specific title only, filter [Location.ID]
 		// by the title ID.
 		Location Location
