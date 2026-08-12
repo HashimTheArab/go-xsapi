@@ -40,6 +40,7 @@ func TestUpdateReturnsResult(t *testing.T) {
 				}, nil
 			})}, xsts.UserInfo{XUID: "1234"})
 
+			var result UpdateResult
 			result, err := client.Update(context.Background(), TitleRequest{
 				State: StateActive,
 			})

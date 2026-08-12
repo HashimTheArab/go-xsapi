@@ -168,7 +168,7 @@ func (c *Client) Remove(ctx context.Context, opts ...internal.RequestOption) err
 }
 
 // Update updates the presence of the authenticated user's current title.
-func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...internal.RequestOption) (*UpdateResult, error) {
+func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...internal.RequestOption) (UpdateResult, error) {
 	requestURL := endpoint.JoinPath(
 		"users",
 		"xuid("+c.userInfo.XUID+")",
@@ -182,21 +182,21 @@ func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...inter
 		internal.DefaultLanguage,
 	))
 	if err != nil {
-		return nil, err
+		return UpdateResult{}, err
 	}
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, err
+		return UpdateResult{}, err
 	}
 	defer resp.Body.Close()
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusCreated:
 		c.shouldCleanup.Store(true)
-		return &UpdateResult{
+		return UpdateResult{
 			HeartbeatAfter: heartbeatAfter(resp.Header.Get("X-Heartbeat-After")),
 		}, nil
 	default:
-		return nil, internal.UnexpectedStatusCode(resp)
+		return UpdateResult{}, internal.UnexpectedStatusCode(resp)
 	}
 }
 
