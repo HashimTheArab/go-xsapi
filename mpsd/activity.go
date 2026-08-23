@@ -167,6 +167,15 @@ func (s *Session) writeActivity(ctx context.Context) error {
 	})
 }
 
+// SetActivity publishes an activity handle owned by the calling user for the
+// multiplayer session. A session published with [PublishConfig] gets one for
+// the publishing user only, so a member that joins an existing session must
+// call this for its own social graph to discover the session. Joining alone
+// adds the member and leaves it undiscoverable.
+func (s *Session) SetActivity(ctx context.Context) error {
+	return s.writeActivity(ctx)
+}
+
 // activityHandle is the wire representation used to create an activity handle
 // for a multiplayer session.
 //
