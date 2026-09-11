@@ -119,12 +119,18 @@ type comparableSocialHandler struct {
 	calls chan<- string
 }
 
+// HandleSocialNotification records which handler received an event.
 func (h comparableSocialHandler) HandleSocialNotification(string, []string) { h.calls <- h.id }
+
+// HandleIncomingFriendRequestCountChange ignores friend-request events.
 func (h comparableSocialHandler) HandleIncomingFriendRequestCountChange(int) {}
-func (h comparableSocialHandler) HandleSubscriptionLost()                    {}
+
+// HandleSubscriptionLost ignores connection errors in handler-removal tests.
+func (h comparableSocialHandler) HandleSubscriptionLost() {}
 
 type countingUnsubscriber struct{ calls int }
 
+// Unsubscribe records each attempt to release the shared RTA subscription.
 func (u *countingUnsubscriber) Unsubscribe(context.Context, *rta.Subscription) error {
 	u.calls++
 	return nil
@@ -136,7 +142,7 @@ func TestUnsubscribeRemovesOnlyTheGivenHandler(t *testing.T) {
 	remove := comparableSocialHandler{id: "remove", calls: calls}
 	unsub := &countingUnsubscriber{}
 	c := &Client{
-		unsubscriber:         unsub,
+		rta:                  rta.NewProvider(nil, unsub),
 		subscription:         rta.NewSubscription("uri", nil),
 		subscriptionHandlers: []SubscriptionHandler{keep, remove},
 		log:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -183,14 +189,43 @@ func TestUnsubscribeRemovesOnlyTheGivenHandler(t *testing.T) {
 	}
 }
 
-func TestUnsubscribeRejectsNonComparableHandler(t *testing.T) {
-	c := &Client{
-		unsubscriber:         &countingUnsubscriber{},
-		subscription:         rta.NewSubscription("uri", nil),
-		subscriptionHandlers: []SubscriptionHandler{nonComparableSocialHandler{}},
-		log:                  slog.New(slog.NewTextHandler(io.Discard, nil)),
+// interfaceSocialHandler exercises comparability of values inside interfaces.
+type interfaceSocialHandler struct {
+	NopSubscriptionHandler
+	data any
+}
+
+func TestUnsubscribeRejectsInvalidHandlers(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		h    SubscriptionHandler
+	}{
+		{"nil", nil},
+		{"slice field", nonComparableSocialHandler{data: []string{"x"}}},
+		{"slice in interface", interfaceSocialHandler{data: []string{"x"}}},
+		{"map in interface", interfaceSocialHandler{data: map[string]int{"x": 1}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := New(http.DefaultClient, nil, xsts.UserInfo{XUID: "1"}, nil)
+			c.subscriptionHandlers = []SubscriptionHandler{tc.h}
+			if err := c.Unsubscribe(context.Background(), tc.h); err == nil {
+				t.Fatal("Unsubscribe should return an error, not panic")
+			}
+			if len(c.subscriptionHandlers) != 1 {
+				t.Fatal("invalid unsubscribe changed registered handlers")
+			}
+		})
 	}
-	if err := c.Unsubscribe(context.Background(), nonComparableSocialHandler{data: []string{"x"}}); err == nil {
-		t.Fatal("Unsubscribe with a non-comparable handler should return an error, not panic")
+}
+
+func TestUnsubscribeWithoutRTAReleasesHandler(t *testing.T) {
+	c := New(http.DefaultClient, nil, xsts.UserInfo{XUID: "1"}, nil)
+	h := NopSubscriptionHandler{}
+	c.subscriptionHandlers = []SubscriptionHandler{h}
+	if err := c.Unsubscribe(context.Background(), h); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.subscriptionHandlers) != 0 {
+		t.Fatal("unavailable RTA retained the removed handler")
 	}
 }
