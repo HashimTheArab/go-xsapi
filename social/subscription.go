@@ -5,26 +5,32 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"reflect"
 	"slices"
 
 	"github.com/df-mc/go-xsapi/v2/rta"
 )
 
-// Subscribe subscribes to RTA (Real-Time Activity) services to receive
-// notifications for changes in the caller's friend list.
+// handlerRegistration gives each Subscribe call its own identity without
+// comparing handler values. Entries stay immutable while callbacks use them.
+type handlerRegistration struct {
+	SubscriptionHandler
+}
+
+// Subscribe registers h for real-time changes to the caller's friend list and
+// returns a function that removes this registration. Registrations share one
+// RTA subscription, which is released when the last registration is removed.
+// Registering the same handler twice creates two independent registrations.
 //
-// The provided [SubscriptionHandler] is used to dispatch events delivered
-// over the RTA subscription, such as when a user adds or removes the caller.
+// The cleanup function is safe to call repeatedly or concurrently. It removes
+// the local registration even if RTA teardown fails; calling it again retries
+// teardown. Callbacks already queued may still run after cleanup returns.
+// [Client.CloseContext] removes all registrations at once.
 //
-// The RTA subscription is created on the first call and cached internally
-// to avoid exceeding RTA's maximum subscription limit. Subsequent calls
-// reuse the existing subscription and append h to the list of active handlers.
-//
-// Subscribe returns an error if h is nil.
-func (c *Client) Subscribe(ctx context.Context, h SubscriptionHandler) (err error) {
+// If h is nil or subscribing fails, Subscribe returns a nil cleanup function
+// and an error.
+func (c *Client) Subscribe(ctx context.Context, h SubscriptionHandler) (func(context.Context) error, error) {
 	if h == nil {
-		return errors.New("xsapi/social: cannot subscribe with a nil SubscriptionHandler")
+		return nil, errors.New("xsapi/social: cannot subscribe with a nil SubscriptionHandler")
 	}
 
 	c.subscriptionMu.Lock()
@@ -32,59 +38,24 @@ func (c *Client) Subscribe(ctx context.Context, h SubscriptionHandler) (err erro
 
 	if !c.subscription.Active() {
 		if err := c.rta.Subscribe(ctx, c.subscription); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
-	c.subscriptionHandlers = append(c.subscriptionHandlers, h)
-	return nil
-}
+	registration := &handlerRegistration{h}
+	c.subscriptionHandlers = append(c.subscriptionHandlers, registration)
+	return func(ctx context.Context) error {
+		c.subscriptionMu.Lock()
+		defer c.subscriptionMu.Unlock()
 
-// Unsubscribe removes one registration made with [Client.Subscribe].
-// Handlers are matched by equality, so h must be comparable and equal to the
-// value passed to Subscribe; a non-comparable h returns an error rather than
-// panicking. Use a pointer handler when distinct registrations need distinct
-// identities. Callbacks already queued for the handler may still run.
-//
-// When the last handler is removed, the shared RTA subscription is torn down so
-// the connection stops receiving events for the resource. Handlers registered
-// by other callers on the same Client are left untouched, unlike
-// [Client.CloseContext], which clears every handler.
-//
-// The handler is removed even if RTA teardown fails. Calling Unsubscribe again
-// retries teardown when no handlers remain and the subscription is still active.
-// Otherwise, removing an unregistered handler is a no-op.
-//
-// Unsubscribe returns an error if h is nil.
-func (c *Client) Unsubscribe(ctx context.Context, h SubscriptionHandler) error {
-	if h == nil {
-		return errors.New("xsapi/social: cannot unsubscribe a nil SubscriptionHandler")
-	}
-	if !reflect.ValueOf(h).Comparable() {
-		return errors.New("xsapi/social: SubscriptionHandler must be comparable to be unsubscribed")
-	}
-
-	c.subscriptionMu.Lock()
-	defer c.subscriptionMu.Unlock()
-
-	// Checking the value also covers interface fields that contain slices or
-	// maps. Checking its type alone would still let these comparisons panic.
-	idx := slices.IndexFunc(c.subscriptionHandlers, func(existing SubscriptionHandler) bool {
-		return existing == h
-	})
-	if idx >= 0 {
-		c.subscriptionHandlers = slices.Delete(c.subscriptionHandlers, idx, idx+1)
-	}
-	if len(c.subscriptionHandlers) > 0 || (idx < 0 && !c.subscription.Active()) {
-		return nil
-	}
-	// The last handler is gone; release the shared RTA subscription. A never-
-	// active subscription (no RTA connection) reports ErrUnavailable, which is
-	// not a failure to unsubscribe.
-	if err := c.rta.Unsubscribe(ctx, c.subscription); err != nil && !errors.Is(err, rta.ErrUnavailable) {
-		return err
-	}
-	return nil
+		if i := slices.Index(c.subscriptionHandlers, registration); i >= 0 {
+			c.subscriptionHandlers = slices.Delete(c.subscriptionHandlers, i, i+1)
+		}
+		if len(c.subscriptionHandlers) > 0 || !c.subscription.Active() {
+			return nil
+		}
+		return c.rta.Unsubscribe(ctx, c.subscription)
+	}, nil
 }
 
 // subscriptionHandler is an internal implementation of [rta.SubscriptionHandler]
@@ -167,7 +138,7 @@ func (h *subscriptionHandler) HandleError(err error) {
 	}
 }
 
-func (h *subscriptionHandler) handlers() []SubscriptionHandler {
+func (h *subscriptionHandler) handlers() []*handlerRegistration {
 	h.subscriptionMu.RLock()
 	defer h.subscriptionMu.RUnlock()
 	return slices.Clone(h.subscriptionHandlers)
