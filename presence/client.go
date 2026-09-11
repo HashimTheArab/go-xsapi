@@ -3,9 +3,11 @@ package presence
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/internal"
@@ -23,8 +25,10 @@ func New(client *http.Client, userInfo xsts.UserInfo) *Client {
 
 // Client implements API client for Xbox Live Presence API.
 type Client struct {
-	client   *http.Client
-	userInfo xsts.UserInfo
+	client        *http.Client
+	userInfo      xsts.UserInfo
+	lifecycleMu   sync.Mutex
+	shouldCleanup bool
 }
 
 // Current returns the caller's current presence. Unlike [PresenceByXUID],
@@ -104,7 +108,12 @@ func (c *Client) Close() error {
 // In most cases, [github.com/df-mc/go-xsapi.Client.CloseContext] should be preferred
 // over calling this method directly.
 func (c *Client) CloseContext(ctx context.Context) error {
-	return c.Remove(ctx)
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.shouldCleanup {
+		return c.remove(ctx)
+	}
+	return nil
 }
 
 // BatchRequest describes the on-wire format for a batch presence query.
@@ -143,6 +152,12 @@ const (
 // immediately, rather than waiting for it to expire on the server.
 // It is safe to call this method even if the user doesn't have any active presence.
 func (c *Client) Remove(ctx context.Context, opts ...internal.RequestOption) error {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	return c.remove(ctx, opts...)
+}
+
+func (c *Client) remove(ctx context.Context, opts ...internal.RequestOption) error {
 	requestURL := endpoint.JoinPath(
 		"users",
 		"xuid("+c.userInfo.XUID+")",
@@ -150,29 +165,60 @@ func (c *Client) Remove(ctx context.Context, opts ...internal.RequestOption) err
 	).String()
 
 	// This request is a DELETE call but returns 200 OK instead of 204 No Content.
-	return internal.Do(ctx, c.client, http.MethodDelete, requestURL, nil, nil, append(opts,
+	if err := internal.Do(ctx, c.client, http.MethodDelete, requestURL, nil, nil, append(opts,
 		contractVersion,
 		internal.RequestHeader("Cache-Control", "no-cache"),
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.DefaultLanguage,
+	)); err != nil {
+		return err
+	}
+	c.shouldCleanup = false
+	return nil
+}
+
+// SetCloaked updates whether the caller's presence is hidden from other users,
+// including friends. It is only functional when signed in to an Xbox app, otherwise
+// an error will be returned.
+func (c *Client) SetCloaked(ctx context.Context, v bool, opts ...internal.RequestOption) error {
+	requestURL := endpoint.JoinPath(
+		"/users/xuid(" + c.userInfo.XUID + ")/state",
+	).String()
+	var state string
+	if v {
+		state = "Cloaked"
+	} else {
+		state = "Active"
+	}
+	req, err := internal.WithJSONBody(ctx, http.MethodPut, requestURL, map[string]any{
+		"state": state,
+	}, append(opts,
+		contractVersion,
+		internal.RequestHeader("Accept", "application/json"),
+		internal.RequestHeader("Content-Type", "application/json"),
 	))
+	if err != nil {
+		return fmt.Errorf("make request: %w", err)
+	}
+
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	default:
+		return internal.UnexpectedStatusCode(resp)
+	}
 }
 
 // Update updates the presence of the authenticated user's current title.
-func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...internal.RequestOption) (UpdateResult, error) {
-	resp, err := c.update(ctx, request, opts)
-	if err != nil {
-		return UpdateResult{}, err
-	}
-	_ = resp.Body.Close()
-	return UpdateResult{
-		HeartbeatAfter: heartbeatAfter(resp.Header.Get("X-Heartbeat-After")),
-	}, nil
-}
-
-// update sends the shared title-presence update request and leaves the
-// successful response body open for callers that need response metadata.
-func (c *Client) update(ctx context.Context, request TitleRequest, opts []internal.RequestOption) (*http.Response, error) {
+func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...internal.RequestOption) (*UpdateResult, error) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
 	requestURL := endpoint.JoinPath(
 		"users",
 		"xuid("+c.userInfo.XUID+")",
@@ -192,12 +238,16 @@ func (c *Client) update(ctx context.Context, request TitleRequest, opts []intern
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		err := internal.UnexpectedStatusCode(resp)
-		_ = resp.Body.Close()
-		return nil, err
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated:
+		c.shouldCleanup = true
+		return &UpdateResult{
+			HeartbeatAfter: heartbeatAfter(resp.Header.Get("X-Heartbeat-After")),
+		}, nil
+	default:
+		return nil, internal.UnexpectedStatusCode(resp)
 	}
-	return resp, nil
 }
 
 // heartbeatAfter parses the X-Heartbeat-After header value as seconds.

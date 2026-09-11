@@ -58,10 +58,56 @@ type Conn struct {
 	cancel context.CancelCauseFunc
 }
 
+// Provider is an interface that provides methods to subscribe/unsubscribe with RTA service.
+type Provider interface {
+	Subscriber
+	Unsubscriber
+}
+
+// NewProvider returns a Provider that dispatches to sub and unsub. Operations
+// whose component is nil fail with [ErrUnavailable].
+func NewProvider(sub Subscriber, unsub Unsubscriber) Provider {
+	return &provider{sub, unsub}
+}
+
+type provider struct {
+	sub   Subscriber
+	unsub Unsubscriber
+}
+
+func (p provider) Subscribe(ctx context.Context, sub *Subscription) error {
+	if p.sub == nil {
+		return ErrUnavailable
+	}
+	return p.sub.Subscribe(ctx, sub)
+}
+
+func (p provider) Unsubscribe(ctx context.Context, sub *Subscription) error {
+	if p.unsub == nil {
+		return ErrUnavailable
+	}
+	return p.unsub.Unsubscribe(ctx, sub)
+}
+
+// Subscriber is the part of [rta.Conn] needed to create subscriptions.
+type Subscriber interface {
+	Subscribe(ctx context.Context, subscription *Subscription) error
+}
+
+// Unsubscriber is the part of [rta.Conn] needed to remove subscriptions.
+type Unsubscriber interface {
+	Unsubscribe(ctx context.Context, sub *Subscription) error
+}
+
 // Subscribe attempts to subscribe using a caller-owned Subscription. It is
 // useful for services that need to preserve the same subscription object across
 // reconnects.
 func (c *Conn) Subscribe(ctx context.Context, sub *Subscription) error {
+	// A nil Conn reports ErrUnavailable so that a nil *Conn passed to a
+	// Provider behaves like a missing connection instead of panicking.
+	if c == nil {
+		return ErrUnavailable
+	}
 	if sub == nil {
 		return errors.New("rta: nil subscription")
 	}
@@ -133,6 +179,10 @@ func (c *Conn) subscribe(ctx context.Context, sub *Subscription) error {
 // Unsubscribe attempts to unsubscribe with a Subscription associated with an ID, with
 // the [context.Context] to be used during the handshake. An error may be returned.
 func (c *Conn) Unsubscribe(ctx context.Context, sub *Subscription) error {
+	// See Subscribe for why a nil Conn is tolerated.
+	if c == nil {
+		return ErrUnavailable
+	}
 	if sub == nil {
 		return errors.New("rta: nil subscription")
 	}
