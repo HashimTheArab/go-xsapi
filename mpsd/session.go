@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/internal"
+	"github.com/go-resty/resty/v2"
 	"github.com/google/uuid"
 )
 
@@ -166,22 +167,15 @@ func (s *Session) update(ctx context.Context, changes SessionDescription, opts [
 	default:
 	}
 
-	req, err := internal.WithJSONBody(ctx, http.MethodPut, s.ref.URL().String(), changes, append(opts,
+	resp, err := internal.Request(ctx, s.client.client, append(opts,
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.RequestHeader("If-Match", "*"),
 		internal.ContractVersion(contractVersion),
-	))
-	if err != nil {
-		return false, fmt.Errorf("make request: %w", err)
-	}
-
-	resp, err := s.client.client.Do(req)
+	)).SetBody(changes).Put(s.ref.URL().String())
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
-
-	switch resp.StatusCode {
+	switch resp.StatusCode() {
 	case http.StatusOK:
 		return false, s.sync(resp)
 	case http.StatusNoContent:
@@ -285,22 +279,15 @@ func (s *Session) Sync(ctx context.Context) error {
 		etag := s.etag
 		s.cacheMu.RUnlock()
 
-		req, err := internal.NewRequest(ctx, http.MethodGet, s.ref.URL().String(), nil, []internal.RequestOption{
+		resp, err := internal.Request(ctx, s.client.client, []internal.RequestOption{
 			internal.RequestHeader("Accept", "application/json"),
 			internal.RequestHeader("If-None-Match", etag),
 			internal.ContractVersion(contractVersion),
-		})
-		if err != nil {
-			return fmt.Errorf("make request: %w", err)
-		}
-
-		resp, err := s.client.client.Do(req)
+		}).Get(s.ref.URL().String())
 		if err != nil {
 			return err
 		}
-		defer resp.Body.Close()
-
-		switch resp.StatusCode {
+		switch resp.StatusCode() {
 		case http.StatusOK:
 			return s.sync(resp)
 		case http.StatusNotModified:
@@ -318,20 +305,19 @@ func (s *Session) Sync(ctx context.Context) error {
 // members absent from the response are not retained from the previous cache.
 // If the response does not include an ETag header, the existing ETag is preserved.
 //
-// The caller is responsible for closing the response body.
 // An error is returned if the response body cannot be decoded.
-func (s *Session) sync(resp *http.Response) error {
+func (s *Session) sync(resp *resty.Response) error {
 	s.cacheMu.Lock()
 	defer s.cacheMu.Unlock()
 
 	// A fresh SessionDescription is allocated so that members absent from
 	// the response are not retained from the previous cache.
 	var d SessionDescription
-	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
-		return fmt.Errorf("decode response body: %w", err)
+	if err := internal.DecodeJSON(resp, &d); err != nil {
+		return err
 	}
 	s.cache = d
-	if e := resp.Header.Get("ETag"); e != "" {
+	if e := resp.Header().Get("ETag"); e != "" {
 		s.etag = e // Update the last observed ETag.
 	}
 	return nil

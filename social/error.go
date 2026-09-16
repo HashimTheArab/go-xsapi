@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/go-resty/resty/v2"
 )
 
 const (
@@ -82,32 +83,34 @@ func (e *ResponseError) Is(target error) bool {
 	}
 }
 
+// responseReadError keeps status and Retry-After metadata when an unsuccessful
+// response cannot be fully read, while preserving the timeout or read error.
+func responseReadError(resp *resty.Response, err error) error {
+	if resp != nil && resp.RawResponse != nil && !resp.IsSuccess() {
+		return errors.Join(responseError(resp), err)
+	}
+	return err
+}
+
 // responseError builds a ResponseError from an unsuccessful Social or PeopleHub
 // response.
-func responseError(resp *http.Response) error {
+func responseError(resp *resty.Response) error {
 	responseErr := &ResponseError{
-		StatusCode: resp.StatusCode,
-		RetryAfter: parseRetryAfter(resp.Header.Get("Retry-After")),
+		StatusCode: resp.StatusCode(),
+		RetryAfter: parseRetryAfter(resp.Header().Get("Retry-After")),
 	}
-	if resp.Request != nil {
-		responseErr.Method = resp.Request.Method
-		if resp.Request.URL != nil {
-			responseErr.URL = resp.Request.URL.String()
+	if req := resp.RawResponse.Request; req != nil {
+		responseErr.Method = req.Method
+		if req.URL != nil {
+			responseErr.URL = req.URL.String()
 		}
-	}
-	if resp.Body == nil {
-		return responseErr
-	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return responseErr
 	}
 	var data struct {
 		Code        int    `json:"code"`
 		Description string `json:"description"`
 		Source      string `json:"source"`
 	}
-	if err := json.Unmarshal(body, &data); err == nil {
+	if err := json.Unmarshal(resp.Body(), &data); err == nil {
 		responseErr.Code = data.Code
 		responseErr.Description = data.Description
 		responseErr.Source = data.Source

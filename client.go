@@ -152,6 +152,9 @@ type ClientConfig struct {
 	// HTTPClient is the HTTP client used to make requests. If nil,
 	// [http.DefaultClient] is used. The client is cloned internally,
 	// so the original is never mutated.
+	// REST service clients use a 30-second timeout if this client's timeout is
+	// not positive, and limit response bodies to 16 MiB. Positive timeouts are
+	// preserved. These defaults do not change OAuth, XAL, or RTA lifecycles.
 	HTTPClient *http.Client
 
 	// Logger is the logger used by the client set and its underlying API

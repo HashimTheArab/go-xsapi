@@ -2,8 +2,6 @@ package social
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 
@@ -52,24 +50,16 @@ func (c *Client) Muted(ctx context.Context, opts ...internal.RequestOption) (xui
 // The callers must specify the appropriate contract version depending on the privacy setting used for update.
 func (c *Client) updatePrivacy(ctx context.Context, method, xuid, typ string, opts []internal.RequestOption) error {
 	requestURL := privacyEndpoint.JoinPath("/users/xuid("+c.userInfo.XUID+")/people", typ).String()
-	req, err := internal.WithJSONBody(ctx, method, requestURL, map[string]any{
-		"Xuid": xuid,
-	}, append(opts,
+	resp, err := internal.Request(ctx, c.client, append(opts,
 		internal.DefaultLanguage,
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.RequestHeader("Accept", "application/json"),
 		internal.RequestHeader("Cache-Control", "no-cache"),
-	))
-	if err != nil {
-		return fmt.Errorf("make request: %w", err)
-	}
-
-	resp, err := c.client.Do(req)
+	)).SetBody(map[string]any{"Xuid": xuid}).Execute(method, requestURL)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode() != http.StatusOK {
 		return internal.UnexpectedStatusCode(resp)
 	}
 	return nil
@@ -78,27 +68,22 @@ func (c *Client) updatePrivacy(ctx context.Context, method, xuid, typ string, op
 // listPrivacy lists XUIDs whose are affected by the caller's privacy settings for the given type.
 func (c *Client) listPrivacy(ctx context.Context, typ string, opts []internal.RequestOption) ([]string, error) {
 	requestURL := privacyEndpoint.JoinPath("/users/xuid("+c.userInfo.XUID+")/people", typ).String()
-	req, err := internal.NewRequest(ctx, http.MethodGet, requestURL, nil, append(opts,
+	resp, err := internal.Request(ctx, c.client, append(opts,
 		internal.DefaultLanguage,
 		internal.ContractVersion("1"),
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.RequestHeader("Accept", "application/json"),
 		internal.RequestHeader("Cache-Control", "no-cache"),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	resp, err := c.client.Do(req)
+	)).Get(requestURL)
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode() != http.StatusOK {
 		return nil, internal.UnexpectedStatusCode(resp)
 	}
 	var list privacyList
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil {
-		return nil, fmt.Errorf("decode response body: %w", err)
+	if err := internal.DecodeJSON(resp, &list); err != nil {
+		return nil, err
 	}
 	if len(list.Users) == 0 {
 		return nil, nil

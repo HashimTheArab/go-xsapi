@@ -10,6 +10,7 @@ import (
 
 	"github.com/cenkalti/backoff/v7"
 	"github.com/df-mc/go-xsapi/v2/internal"
+	"github.com/go-resty/resty/v2"
 	"github.com/google/uuid"
 )
 
@@ -83,7 +84,7 @@ func (c *Client) Join(ctx context.Context, handleID uuid.UUID, config JoinConfig
 	// This request call will fail if the multiplayer session does not exist.
 	requestURL := endpoint.JoinPath("handles", handleID.String(), "session").String()
 	ifMatch := "*"
-	resp, err := backoff.Retry(ctx, func() (*http.Response, error) {
+	resp, err := backoff.Retry(ctx, func() (*resty.Response, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, backoff.Permanent(err)
 		}
@@ -93,29 +94,23 @@ func (c *Client) Join(ctx context.Context, handleID uuid.UUID, config JoinConfig
 			internal.RequestHeader("If-Match", ifMatch),
 			internal.ContractVersion(contractVersion),
 		)
-		req, err := internal.WithJSONBody(ctx, http.MethodPut, requestURL, d, requestOpts)
-		if err != nil {
-			return nil, backoff.Permanent(fmt.Errorf("make request: %w", err))
-		}
-
-		resp, err := c.client.Do(req)
+		resp, err := internal.Request(ctx, c.client, requestOpts).SetBody(d).Put(requestURL)
 		if err != nil {
 			// A failed session write may have reached MPSD, so it cannot be
 			// replayed unless the service explicitly rejected it with 412.
 			return nil, backoff.Permanent(err)
 		}
-		if resp.StatusCode == http.StatusOK {
+		if resp.StatusCode() == http.StatusOK {
 			return resp, nil
 		}
 		err = internal.UnexpectedStatusCode(resp)
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusPreconditionFailed {
+		if resp.StatusCode() != http.StatusPreconditionFailed {
 			return nil, backoff.Permanent(err)
 		}
 		// MPSD returns the current ETag when a concurrent session update
 		// races this join. Reuse it for a bounded retry instead of making
 		// callers rediscover and retry this request themselves.
-		ifMatch = resp.Header.Get("ETag")
+		ifMatch = resp.Header().Get("ETag")
 		if ifMatch == "" {
 			ifMatch = "*"
 		}
@@ -141,8 +136,7 @@ func (c *Client) Join(ctx context.Context, handleID uuid.UUID, config JoinConfig
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	loc := resp.Header.Get("Content-Location")
+	loc := resp.Header().Get("Content-Location")
 	if loc == "" {
 		return nil, fmt.Errorf("Content-Location header is absent from response")
 	}

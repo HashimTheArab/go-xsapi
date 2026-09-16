@@ -8,8 +8,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/df-mc/go-xsapi/v2/internal"
 	"github.com/df-mc/go-xsapi/v2/rta"
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"github.com/go-resty/resty/v2"
 )
 
 // New returns a new [Client] using the provided components.
@@ -18,7 +20,7 @@ func New(client *http.Client, conn rta.Provider, userInfo xsts.UserInfo, log *sl
 		log = slog.Default()
 	}
 	c := &Client{
-		client:   client,
+		client:   internal.NewRESTClient(client),
 		rta:      rta.NewProvider(conn, conn),
 		userInfo: userInfo,
 		log:      log,
@@ -39,7 +41,7 @@ func New(client *http.Client, conn rta.Provider, userInfo xsts.UserInfo, log *sl
 //   - social.xboxlive.com for relationship management, such as adding or removing friends.
 //   - peoplehub.xboxlive.com for querying user profiles.
 type Client struct {
-	client *http.Client
+	client *resty.Client
 	rta    rta.Provider
 
 	userInfo xsts.UserInfo

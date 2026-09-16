@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/df-mc/go-xsapi/v2/internal"
 	"github.com/df-mc/go-xsapi/v2/rta"
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
 	"github.com/google/uuid"
@@ -179,7 +180,7 @@ func TestSessionUpdateReturnsDeletedOnNoContent(t *testing.T) {
 	})}
 
 	session := &Session{
-		client: &Client{client: httpClient},
+		client: &Client{client: internal.NewRESTClient(httpClient)},
 		ref:    ref,
 		etag:   `"old-etag"`,
 		cache:  oldState,
@@ -249,7 +250,7 @@ func TestSessionSyncWaitsForInFlightUpdate(t *testing.T) {
 	})}
 
 	session := &Session{
-		client: &Client{client: httpClient},
+		client: &Client{client: internal.NewRESTClient(httpClient)},
 		ref:    ref,
 		etag:   `"old-etag"`,
 		closed: make(chan struct{}),
@@ -305,7 +306,7 @@ func TestSessionSetCustomPropertiesMarksDeletedOnNoContent(t *testing.T) {
 	})}
 
 	session := &Session{
-		client: &Client{client: httpClient},
+		client: &Client{client: internal.NewRESTClient(httpClient)},
 		ref:    ref,
 		etag:   `"old-etag"`,
 		cache: SessionDescription{
@@ -361,7 +362,7 @@ func TestSessionCloseContextClosesHandleWithoutClearingSyncedState(t *testing.T)
 	})}
 
 	client := &Client{
-		client:   httpClient,
+		client:   internal.NewRESTClient(httpClient),
 		sessions: map[string]*Session{},
 	}
 	session := &Session{
@@ -426,7 +427,7 @@ func TestSessionCloseContextConcurrentCloseSendsSingleUpdate(t *testing.T) {
 
 	session := &Session{
 		client: &Client{
-			client:   httpClient,
+			client:   internal.NewRESTClient(httpClient),
 			sessions: map[string]*Session{},
 		},
 		ref:    ref,
@@ -489,7 +490,7 @@ func TestSubscriptionHandlerClosesSessionsOnUserUnsubscribe(t *testing.T) {
 	})}
 
 	client := &Client{
-		client:   httpClient,
+		client:   internal.NewRESTClient(httpClient),
 		sessions: map[string]*Session{},
 	}
 	session := &Session{
@@ -609,7 +610,7 @@ func TestSessionConnectionReconcileSerializesWithReconnect(t *testing.T) {
 	})}
 
 	client := &Client{
-		client:       httpClient,
+		client:       internal.NewRESTClient(httpClient),
 		rta:          rta.NewProvider(subscriberFunc(func(context.Context, *rta.Subscription) error { return nil }), nil),
 		subscription: rta.NewSubscription(resourceURI, nil),
 		sessions:     map[string]*Session{},
@@ -733,7 +734,7 @@ func TestSubscriptionHandlerCallbackRunsAfterReconcileLock(t *testing.T) {
 	})}
 
 	client := &Client{
-		client:       httpClient,
+		client:       internal.NewRESTClient(httpClient),
 		rta:          rta.NewProvider(subscriberFunc(func(context.Context, *rta.Subscription) error { return nil }), nil),
 		subscription: rta.NewSubscription(resourceURI, nil),
 		sessions:     map[string]*Session{},

@@ -10,4 +10,9 @@ require (
 	golang.org/x/oauth2 v0.36.0
 )
 
-require golang.org/x/text v0.34.0
+require (
+	github.com/go-resty/resty/v2 v2.17.2
+	golang.org/x/text v0.34.0
+)
+
+require golang.org/x/net v0.43.0 // indirect

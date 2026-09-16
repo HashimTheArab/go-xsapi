@@ -3,7 +3,6 @@ package presence
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -12,20 +11,21 @@ import (
 
 	"github.com/df-mc/go-xsapi/v2/internal"
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"github.com/go-resty/resty/v2"
 	"github.com/google/uuid"
 )
 
 // New returns a new Client with the provided components.
 func New(client *http.Client, userInfo xsts.UserInfo) *Client {
 	return &Client{
-		client:   client,
+		client:   internal.NewRESTClient(client),
 		userInfo: userInfo,
 	}
 }
 
 // Client implements API client for Xbox Live Presence API.
 type Client struct {
-	client        *http.Client
+	client        *resty.Client
 	userInfo      xsts.UserInfo
 	lifecycleMu   sync.Mutex
 	shouldCleanup bool
@@ -190,24 +190,15 @@ func (c *Client) SetCloaked(ctx context.Context, v bool, opts ...internal.Reques
 	} else {
 		state = "Active"
 	}
-	req, err := internal.WithJSONBody(ctx, http.MethodPut, requestURL, map[string]any{
-		"state": state,
-	}, append(opts,
+	resp, err := internal.Request(ctx, c.client, append(opts,
 		contractVersion,
 		internal.RequestHeader("Accept", "application/json"),
 		internal.RequestHeader("Content-Type", "application/json"),
-	))
-	if err != nil {
-		return fmt.Errorf("make request: %w", err)
-	}
-
-	resp, err := c.client.Do(req)
+	)).SetBody(map[string]any{"state": state}).Put(requestURL)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-
-	switch resp.StatusCode {
+	switch resp.StatusCode() {
 	case http.StatusOK:
 		return nil
 	default:
@@ -225,25 +216,24 @@ func (c *Client) Update(ctx context.Context, request TitleRequest, opts ...inter
 		"/devices/current/titles/current",
 	).String()
 
-	req, err := internal.WithJSONBody(ctx, http.MethodPost, requestURL, request, append(opts,
+	resp, err := internal.Request(ctx, c.client, append(opts,
 		contractVersion,
 		internal.RequestHeader("Cache-Control", "no-cache"),
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.DefaultLanguage,
-	))
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
-	case http.StatusOK, http.StatusCreated:
+	)).SetBody(request).Post(requestURL)
+	if resp != nil && (resp.StatusCode() == http.StatusOK || resp.StatusCode() == http.StatusCreated) {
+		// Accepted headers confirm the presence was updated, even if reading
+		// the response fails. CloseContext must still remove it.
 		c.shouldCleanup = true
+	}
+	if err != nil {
+		return nil, err
+	}
+	switch resp.StatusCode() {
+	case http.StatusOK, http.StatusCreated:
 		return &UpdateResult{
-			HeartbeatAfter: heartbeatAfter(resp.Header.Get("X-Heartbeat-After")),
+			HeartbeatAfter: heartbeatAfter(resp.Header().Get("X-Heartbeat-After")),
 		}, nil
 	default:
 		return nil, internal.UnexpectedStatusCode(resp)

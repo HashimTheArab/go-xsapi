@@ -2,8 +2,6 @@ package social
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/url"
 
@@ -108,28 +106,22 @@ func (c *Client) AddFriends(ctx context.Context, xuids []string, opts ...interna
 	q.Set("method", "add")
 	requestURL.RawQuery = q.Encode()
 
-	req, err := internal.WithJSONBody(ctx, http.MethodPost, requestURL.String(), bulkFriendsRequest{XUIDs: xuids}, append(
+	resp, err := internal.Request(ctx, c.client, append(
 		opts,
 		socialContractVersion,
 		internal.RequestHeader("Accept", "application/json"),
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.RequestHeader("Cache-Control", "no-cache"),
 		internal.DefaultLanguage,
-	))
+	)).SetBody(bulkFriendsRequest{XUIDs: xuids}).Post(requestURL.String())
 	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
+		return nil, responseReadError(resp, err)
 	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
+	switch resp.StatusCode() {
 	case http.StatusOK, http.StatusCreated:
 		var result bulkFriendsResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return nil, fmt.Errorf("decode response body: %w", err)
+		if err := internal.DecodeJSON(resp, &result); err != nil {
+			return nil, err
 		}
 		return result.UpdatedPeople, nil
 	default:
@@ -148,28 +140,22 @@ func (c *Client) RemoveFriends(ctx context.Context, xuids []string, opts ...inte
 	q.Set("deleteRelationships", "friends")
 	requestURL.RawQuery = q.Encode()
 
-	req, err := internal.WithJSONBody(ctx, http.MethodPost, requestURL.String(), bulkFriendsRequest{XUIDs: xuids}, append(
+	resp, err := internal.Request(ctx, c.client, append(
 		opts,
 		socialContractVersion,
 		internal.RequestHeader("Accept", "application/json"),
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.RequestHeader("Cache-Control", "no-cache"),
 		internal.DefaultLanguage,
-	))
+	)).SetBody(bulkFriendsRequest{XUIDs: xuids}).Post(requestURL.String())
 	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
+		return nil, responseReadError(resp, err)
 	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
+	switch resp.StatusCode() {
 	case http.StatusOK:
 		var result bulkFriendsResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return nil, fmt.Errorf("decode response body: %w", err)
+		if err := internal.DecodeJSON(resp, &result); err != nil {
+			return nil, err
 		}
 		return result.UpdatedPeople, nil
 	default:
@@ -198,24 +184,18 @@ type (
 // doRelationship sends a relationship mutation request and converts non-success
 // responses into ResponseError values.
 func (c *Client) doRelationship(ctx context.Context, method, requestURL string, opts []internal.RequestOption, successCodes ...int) error {
-	req, err := internal.NewRequest(ctx, method, requestURL, nil, append(
+	resp, err := internal.Request(ctx, c.client, append(
 		opts,
 		socialContractVersion,
 		internal.RequestHeader("Accept", "application/json"),
 		internal.RequestHeader("Cache-Control", "no-cache"),
 		internal.DefaultLanguage,
-	))
+	)).Execute(method, requestURL)
 	if err != nil {
-		return fmt.Errorf("make request: %w", err)
+		return responseReadError(resp, err)
 	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
 	for _, code := range successCodes {
-		if resp.StatusCode == code {
+		if resp.StatusCode() == code {
 			return nil
 		}
 	}

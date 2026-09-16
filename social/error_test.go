@@ -210,20 +210,18 @@ func TestAddFriendsReturnsBulkOperationLimit(t *testing.T) {
 }
 
 func TestResponseErrorPreservesMetadataWhenBodyReadFails(t *testing.T) {
-	req, err := http.NewRequest(http.MethodGet, "https://peoplehub.xboxlive.com/users/me/people/social", nil)
-	if err != nil {
-		t.Fatal(err)
+	client := New(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": []string{"7"}},
+			Body:       errReadCloser{},
+			Request:    req,
+		}, nil
+	})}, nil, xsts.UserInfo{}, nil)
+	_, err := client.Search(context.Background(), "player")
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !errors.Is(err, ErrRateLimited) {
+		t.Fatalf("Search error = %v, want read error and rate-limit metadata", err)
 	}
-	resp := &http.Response{
-		StatusCode: http.StatusTooManyRequests,
-		Header: http.Header{
-			"Retry-After": []string{"7"},
-		},
-		Body:    errReadCloser{},
-		Request: req,
-	}
-
-	err = responseError(resp)
 	var responseErr *ResponseError
 	if !errors.As(err, &responseErr) {
 		t.Fatalf("responseError = %T: %v, want *ResponseError", err, err)

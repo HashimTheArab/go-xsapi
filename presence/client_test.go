@@ -2,14 +2,45 @@ package presence
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
 )
+
+func TestUpdateReadFailureStillRequiresCleanup(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusCreated, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			deletes := 0
+			client := New(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.Method == http.MethodDelete {
+					deletes++
+					return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+				}
+				return &http.Response{StatusCode: status, Body: io.NopCloser(iotest.ErrReader(io.ErrUnexpectedEOF)), Request: req}, nil
+			})}, xsts.UserInfo{XUID: "1234"})
+			if _, err := client.Update(context.Background(), TitleRequest{}); !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("Update error=%v, want read error", err)
+			}
+			if err := client.CloseContext(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			wantDeletes := 1
+			if status == http.StatusInternalServerError {
+				wantDeletes = 0
+			}
+			if deletes != wantDeletes {
+				t.Fatalf("DELETE requests=%d, want %d", deletes, wantDeletes)
+			}
+		})
+	}
+}
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 

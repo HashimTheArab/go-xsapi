@@ -69,6 +69,28 @@ user := users[0]
 fmt.Println(user.GamerTag)
 ```
 
+## HTTP requests
+
+The MPSD, Social, Presence, and Notification clients use Resty v2 internally.
+They keep the supplied `http.Client` transport, cookie jar, and redirect policy,
+including Xbox authentication and request signing. The supplied client is never
+modified.
+
+- REST requests use a 30-second timeout when the supplied client has no positive
+  timeout. Set `ClientConfig.HTTPClient.Timeout` to choose a different timeout.
+  A shorter caller context deadline still takes precedence.
+- Response bodies, including error bodies and decompressed data, are limited to
+  16 MiB. Resty reads and closes them before the endpoint processes the response.
+- Resty automatic retries are disabled. A failed response does not mean a write
+  was rejected. MPSD Join retains its explicit, bounded retry for `412` conflicts.
+- Endpoints still check their own accepted status codes and decode JSON even when
+  Xbox omits the content type. Social errors retain Xbox codes and `Retry-After`.
+
+OAuth, XAL, and RTA WebSockets keep their existing HTTP clients and lifecycles.
+These REST defaults do not put a deadline on a whole multi-request operation or
+on time spent waiting for a lock. Pass a context with a deadline for operations
+that need an overall budget, and keep health checks around long-running workers.
+
 ## Contact
 
 [![Discord Banner 2](https://discordapp.com/api/guilds/623638955262345216/widget.png?style=banner2)](https://discord.gg/U4kFWHhTNR)

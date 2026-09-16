@@ -3,7 +3,6 @@ package notification
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/df-mc/go-xsapi/v2/internal"
 	"github.com/df-mc/go-xsapi/v2/xal/xsts"
+	"github.com/go-resty/resty/v2"
 )
 
 // New returns a Client using the given components.
@@ -22,7 +22,7 @@ func New(client *http.Client, userInfo xsts.UserInfo, log *slog.Logger) *Client 
 		log = slog.Default()
 	}
 	return &Client{
-		client:   client,
+		client:   internal.NewRESTClient(client),
 		userInfo: userInfo,
 		log:      log,
 	}
@@ -30,7 +30,7 @@ func New(client *http.Client, userInfo xsts.UserInfo, log *slog.Logger) *Client 
 
 // Client implements an API Client for Xbox Live Notification API.
 type Client struct {
-	client   *http.Client
+	client   *resty.Client
 	userInfo xsts.UserInfo
 	log      *slog.Logger
 }
@@ -59,24 +59,19 @@ func (c *Client) Inbox(ctx context.Context, filter InboxFilter, opts ...internal
 	q.Set("subscriptionType", strings.Join(filter.SubscriptionTypes, ","))
 	requestURL.RawQuery = q.Encode()
 
-	req, err := internal.NewRequest(ctx, http.MethodGet, requestURL.String(), nil, append(slices.Clip(opts), contractVersion))
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	resp, err := c.client.Do(req)
+	resp, err := internal.Request(ctx, c.client, append(slices.Clip(opts), contractVersion)).Get(requestURL.String())
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode() != http.StatusOK {
 		return nil, internal.UnexpectedStatusCode(resp)
 	}
 
 	var result struct {
 		Items []json.RawMessage `json:"items"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response body: %w", err)
+	if err := internal.DecodeJSON(resp, &result); err != nil {
+		return nil, err
 	}
 	if len(result.Items) == 0 {
 		return nil, nil
@@ -152,24 +147,18 @@ func (c *Client) Update(ctx context.Context, notifications []Notification, typ s
 	}
 
 	requestURL := endpointURL.JoinPath("/users/", c.userInfo.XUID, "/inbox/subscriptions/batch").String()
-	req, err := internal.WithJSONBody(ctx, http.MethodPost, requestURL, updateRequest{
+	resp, err := internal.Request(ctx, c.client, append(slices.Clip(opts),
+		contractVersion,
+		internal.RequestHeader("Content-Type", "application/json"),
+	)).SetBody(updateRequest{
 		Items:      items,
 		Timestamp:  timestamp,
 		UpdateType: typ,
-	}, append(slices.Clip(opts),
-		contractVersion,
-		internal.RequestHeader("Content-Type", "application/json"),
-	))
-	if err != nil {
-		return fmt.Errorf("make request: %w", err)
-	}
-
-	resp, err := c.client.Do(req)
+	}).Post(requestURL)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	switch resp.StatusCode {
+	switch resp.StatusCode() {
 	case http.StatusOK:
 		return nil
 	default:

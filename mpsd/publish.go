@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/df-mc/go-xsapi/v2/internal"
+	"github.com/go-resty/resty/v2"
 	"github.com/google/uuid"
 )
 
@@ -107,22 +108,15 @@ func (c *Client) Publish(ctx context.Context, ref SessionReference, config Publi
 
 	// Newly create a multiplayer session.
 	// This request call will fail if the session already exists.
-	req, err := internal.WithJSONBody(ctx, http.MethodPut, ref.URL().String(), d, append(opts,
+	resp, err := internal.Request(ctx, c.client, append(opts,
 		internal.RequestHeader("Content-Type", "application/json"),
 		internal.RequestHeader("If-None-Match", "*"),
 		internal.ContractVersion(contractVersion),
-	))
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-
-	resp, err := c.client.Do(req)
+	)).SetBody(d).Put(ref.URL().String())
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
-
-	switch resp.StatusCode {
+	switch resp.StatusCode() {
 	case http.StatusCreated:
 		return c.createSession(ctx, ref, resp)
 	default:
@@ -136,10 +130,9 @@ func (c *Client) Publish(ctx context.Context, ref SessionReference, config Publi
 // nil or unavailable in the context. In that case, the session reference will
 // be automatically derived from the Content-Location header in the first request call.
 // The initial response will be used to decode the initial contents of the remote session.
-// The caller should close the response body after calling this method.
-func (c *Client) createSession(ctx context.Context, ref SessionReference, resp *http.Response) (*Session, error) {
+func (c *Client) createSession(ctx context.Context, ref SessionReference, resp *resty.Response) (*Session, error) {
 	var d SessionDescription
-	if err := json.NewDecoder(resp.Body).Decode(&d); err != nil {
+	if err := internal.DecodeJSON(resp, &d); err != nil {
 		return nil, fmt.Errorf("decode initial contents: %w", err)
 	}
 	s := &Session{
@@ -147,7 +140,7 @@ func (c *Client) createSession(ctx context.Context, ref SessionReference, resp *
 
 		h:      NopHandler{}, // fast-path without locking
 		cache:  d,
-		etag:   resp.Header.Get("ETag"),
+		etag:   resp.Header().Get("ETag"),
 		ref:    ref,
 		closed: make(chan struct{}),
 	}

@@ -1,12 +1,10 @@
 package social
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -28,27 +26,20 @@ func (c *Client) Search(ctx context.Context, query string, opts ...internal.Requ
 		// Supported values are: "q" and "maxItems"
 	}.Encode()
 
-	req, err := internal.NewRequest(ctx, http.MethodGet, requestURL.String(), nil, append(
+	resp, err := internal.Request(ctx, c.client, append(
 		opts,
 		peopleHubContractVersion,
 		internal.RequestHeader("Accept", "application/json"),
 		internal.DefaultLanguage,
-	))
+	)).Get(requestURL.String())
 	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
+		return nil, responseReadError(resp, err)
 	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	switch resp.StatusCode {
+	switch resp.StatusCode() {
 	case http.StatusOK:
 		var result batchResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return nil, fmt.Errorf("decode response body: %w", err)
+		if err := internal.DecodeJSON(resp, &result); err != nil {
+			return nil, err
 		}
 		return result.Users, nil
 	default:
@@ -202,46 +193,30 @@ func (c *Client) users(ctx context.Context, perspective, selector string, postBo
 	if conf.ContractVersion > 0 {
 		contractVersion = internal.ContractVersion(strconv.Itoa(conf.ContractVersion))
 	}
-	var (
-		requestURL = peopleHubEndpoint.JoinPath(segments...).String()
-
-		reqBody io.Reader
-		method  string
-	)
+	requestURL := peopleHubEndpoint.JoinPath(segments...).String()
+	method := http.MethodGet
 	if postBody != nil {
-		buf := &bytes.Buffer{}
-		defer buf.Reset()
-		if err := json.NewEncoder(buf).Encode(postBody); err != nil {
-			return nil, fmt.Errorf("encode request body: %w", err)
-		}
-		method, reqBody = http.MethodPost, buf
-	} else {
-		method = http.MethodGet
+		opts = append(opts, internal.RequestHeader("Content-Type", "application/json"))
 	}
-
-	req, err := internal.NewRequest(ctx, method, requestURL, reqBody, append(opts,
+	req := internal.Request(ctx, c.client, append(opts,
 		contractVersion,
 		internal.RequestHeader("Accept", "application/json"),
 		internal.DefaultLanguage,
 	))
-	if err != nil {
-		return nil, fmt.Errorf("make request: %w", err)
-	}
-	if reqBody != nil {
-		req.Header.Set("Content-Type", "application/json")
+	if postBody != nil {
+		method = http.MethodPost
+		req.SetBody(postBody).SetHeader("Content-Type", "application/json")
 	}
 
-	resp, err := c.client.Do(req)
+	resp, err := req.Execute(method, requestURL)
 	if err != nil {
-		return nil, err
+		return nil, responseReadError(resp, err)
 	}
-	defer resp.Body.Close()
-
-	switch resp.StatusCode {
+	switch resp.StatusCode() {
 	case http.StatusOK:
 		var result batchResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return nil, fmt.Errorf("decode response body: %w", err)
+		if err := internal.DecodeJSON(resp, &result); err != nil {
+			return nil, err
 		}
 		return result.Users, nil
 	default:
