@@ -10,24 +10,20 @@ import (
 	"github.com/df-mc/go-xsapi/v2/rta"
 )
 
-// handlerRegistration gives each Subscribe call its own identity without
-// comparing handler values. Entries stay immutable while callbacks use them.
+// handlerRegistration lets us remove one registration without comparing handlers.
 type handlerRegistration struct {
 	SubscriptionHandler
 }
 
-// Subscribe registers h for real-time changes to the caller's friend list and
-// returns a function that removes this registration. Registrations share one
-// RTA subscription, which is released when the last registration is removed.
-// Registering the same handler twice creates two independent registrations.
+// Subscribe calls h when the caller's friend list changes. It returns a function
+// that removes only this registration, even if h was registered more than once.
+// Removing the last handler also unsubscribes from RTA.
 //
-// The cleanup function is safe to call repeatedly or concurrently. It removes
-// the local registration even if RTA teardown fails; calling it again retries
-// teardown. Callbacks already queued may still run after cleanup returns.
-// [Client.CloseContext] removes all registrations at once.
+// The returned function is safe to call repeatedly or concurrently. If RTA
+// unsubscribe fails, the handler stays removed and another call retries it.
+// Callbacks already queued may still run. [Client.CloseContext] removes all handlers.
 //
-// If h is nil or subscribing fails, Subscribe returns a nil cleanup function
-// and an error.
+// If h is nil or subscribing fails, Subscribe returns a nil function and an error.
 func (c *Client) Subscribe(ctx context.Context, h SubscriptionHandler) (func(context.Context) error, error) {
 	if h == nil {
 		return nil, errors.New("xsapi/social: cannot subscribe with a nil SubscriptionHandler")

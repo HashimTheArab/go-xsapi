@@ -114,7 +114,7 @@ func (h nonComparableSocialHandler) HandleSubscriptionLost() {
 	h.calls <- "lost"
 }
 
-// interfaceSocialHandler carries arbitrary data without implementing comparisons.
+// interfaceSocialHandler tests handlers with a slice or map stored in an interface.
 type interfaceSocialHandler struct {
 	NopSubscriptionHandler
 	data any

@@ -203,7 +203,7 @@ func TestConcurrentCleanupPreservesSharedSubscription(t *testing.T) {
 	}
 }
 
-// socialRTATestServer supplies local RTA handshakes for social lifecycle tests.
+// socialRTATestServer records RTA requests and controls unsubscribe errors.
 type socialRTATestServer struct {
 	subscribeCount    atomic.Uint32
 	unsubscribeCount  atomic.Uint32
@@ -234,7 +234,7 @@ func newSocialRTATestClient(t *testing.T) (*Client, *socialRTATestServer) {
 	return New(httpClient, conn, xsts.UserInfo{XUID: "1"}, log), srv
 }
 
-// handle responds to subscribe and unsubscribe messages over the test WebSocket.
+// handle answers subscribe and unsubscribe requests.
 func (s *socialRTATestServer) handle(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols: []string{r.Header.Get("Sec-WebSocket-Protocol")},
@@ -274,7 +274,7 @@ type socialRTATestTransport struct {
 	base   http.RoundTripper
 }
 
-// RoundTrip clones the request before replacing its destination for this test.
+// RoundTrip redirects the request to the test server.
 func (t socialRTATestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
 	r.URL.Scheme, r.URL.Host = t.target.Scheme, t.target.Host
