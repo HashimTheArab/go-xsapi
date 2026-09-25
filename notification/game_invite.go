@@ -14,10 +14,7 @@ type (
 	// to a game. The caller can join the multiplayer session by using the HandleID
 	// contained in its Actions.
 	GameInvite struct {
-		notification[GameInviteAction]
-		// Options contains options for launching/activating a title with the
-		// invitation.
-		Options GameInviteOptions `json:"NotificationOptions"`
+		notification[GameInviteAction, GameInviteOptions]
 	}
 
 	// GameInviteAction represents an action that can be taken on a GameInvite
@@ -56,24 +53,6 @@ type (
 		GameTypes map[string]mpsd.GameType `json:"gameTypes"`
 	}
 )
-
-// UnmarshalJSON decodes both the common notification fields and the
-// game-invite-specific options.
-func (i *GameInvite) UnmarshalJSON(b []byte) error {
-	var common notification[GameInviteAction]
-	if err := json.Unmarshal(b, &common); err != nil {
-		return err
-	}
-	var specific struct {
-		Options GameInviteOptions `json:"NotificationOptions"`
-	}
-	if err := json.Unmarshal(b, &specific); err != nil {
-		return err
-	}
-	i.notification = common
-	i.Options = specific.Options
-	return nil
-}
 
 // UnmarshalJSON decodes the given JSON data into GameInviteLaunchInfo.
 func (i *GameInviteLaunchInfo) UnmarshalJSON(b []byte) error {

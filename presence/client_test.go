@@ -42,7 +42,19 @@ func TestConcurrentCloseContextRemovesOnce(t *testing.T) {
 	errs := make(chan error, 2)
 	go func() { errs <- client.CloseContext(context.Background()) }()
 	<-deleteStarted
-	go func() { errs <- client.CloseContext(context.Background()) }()
+	closeStarted := make(chan struct{})
+	go func() {
+		close(closeStarted)
+		errs <- client.CloseContext(context.Background())
+	}()
+	<-closeStarted
+	select {
+	case err := <-errs:
+		close(releaseDelete)
+		<-errs
+		t.Fatalf("second CloseContext completed before the first DELETE: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
 	close(releaseDelete)
 	for range 2 {
 		if err := <-errs; err != nil {
@@ -80,12 +92,22 @@ func TestUpdateRacingRemoveRetainsNewCleanup(t *testing.T) {
 	go func() { removeDone <- client.Remove(context.Background()) }()
 	<-deleteStarted
 	updateDone := make(chan error, 1)
+	updateStarted := make(chan struct{})
 	go func() {
+		close(updateStarted)
 		_, err := client.Update(context.Background(), TitleRequest{})
 		updateDone <- err
 	}()
+	<-updateStarted
+	select {
+	case err := <-updateDone:
+		close(releaseDelete)
+		<-removeDone
+		t.Fatalf("Update completed while DELETE was blocked: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
 	if got := posts.Load(); got != 1 {
-		t.Fatalf("POST requests while DELETE is blocked = %d, want 1", got)
+		t.Errorf("POST requests while DELETE is blocked = %d, want 1", got)
 	}
 	close(releaseDelete)
 	if err := <-removeDone; err != nil {
@@ -127,7 +149,6 @@ func TestUpdateReturnsResult(t *testing.T) {
 				}, nil
 			})}, xsts.UserInfo{XUID: "1234"})
 
-			var result *UpdateResult
 			result, err := client.Update(context.Background(), TitleRequest{
 				State: StateActive,
 			})

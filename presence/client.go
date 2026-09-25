@@ -157,6 +157,7 @@ func (c *Client) Remove(ctx context.Context, opts ...internal.RequestOption) err
 	return c.remove(ctx, opts...)
 }
 
+// remove clears the current presence while lifecycleMu is held.
 func (c *Client) remove(ctx context.Context, opts ...internal.RequestOption) error {
 	requestURL := endpoint.JoinPath(
 		"users",
