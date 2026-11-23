@@ -524,9 +524,7 @@ func (c *Conn) probe(ctx context.Context, conn *websocket.Conn) {
 			return
 		case <-ticker.C:
 		}
-		pingCtx, cancel := context.WithTimeout(ctx, c.dialer.pingTimeout)
-		err := conn.Ping(pingCtx)
-		cancel()
+		err := c.ping(ctx, conn)
 		if err == nil {
 			continue
 		}
@@ -537,6 +535,13 @@ func (c *Conn) probe(ctx context.Context, conn *websocket.Conn) {
 		_ = conn.CloseNow()
 		return
 	}
+}
+
+// ping waits up to the ping timeout for conn, which read must be reading, to answer.
+func (c *Conn) ping(ctx context.Context, conn *websocket.Conn) error {
+	ctx, cancel := context.WithTimeout(ctx, c.dialer.pingTimeout)
+	defer cancel()
+	return conn.Ping(ctx)
 }
 
 // Close closes the websocket connection with websocket.StatusNormalClosure.

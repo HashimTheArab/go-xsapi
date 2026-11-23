@@ -639,33 +639,49 @@ func TestSilentWebSocketIsReplaced(t *testing.T) {
 	}
 }
 
-// A redial whose upgrade never finishes must be retried, or it holds the only reconnect.
-func TestStalledRedialIsRetried(t *testing.T) {
-	shortBackoff(t)
-	srv := newConnTestServer(t)
-	defer srv.Close()
+// A replacement that stalls must be retried with its subscriptions, or they are stranded.
+func TestStalledReplacementIsRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stall func(srv *connTestServer)
+		dials uint32
+	}{
+		{"upgrade never finishes", func(srv *connTestServer) { srv.stallNextDial.Store(true) }, 2},
+		{"silent after upgrade", func(srv *connTestServer) { srv.silentDial.Store(2) }, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shortBackoff(t)
+			srv := newConnTestServer(t)
+			defer srv.Close()
 
-	conn := srv.Dial(t, func(d *dialer) { d.redialTimeout = 250 * time.Millisecond })
-	defer conn.Close()
+			conn := srv.Dial(t, func(d *dialer) {
+				d.pingTimeout, d.redialTimeout = 250*time.Millisecond, 250*time.Millisecond
+			})
+			defer conn.Close()
 
-	h := newBlockingSubscribeHandler(2)
-	defer close(h.unblock)
-	sub := NewSubscription("test-resource", h)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := conn.Subscribe(ctx, sub); err != nil {
-		t.Fatalf("Subscribe returned error: %v", err)
-	}
+			h := newBlockingSubscribeHandler(2)
+			defer close(h.unblock)
+			sub := NewSubscription("test-resource", h)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := conn.Subscribe(ctx, sub); err != nil {
+				t.Fatalf("Subscribe returned error: %v", err)
+			}
 
-	srv.stallNextDial.Store(true)
-	_ = conn.conn.CloseNow()
-	select {
-	case <-h.entered:
-	case <-time.After(2 * time.Second):
-		t.Fatal("stalled redial was not retried")
-	}
-	if srv.stallNextDial.Load() {
-		t.Fatal("no redial stalled")
+			tc.stall(srv)
+			_ = conn.conn.CloseNow()
+			select {
+			case <-h.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("stalled replacement was not retried")
+			}
+			if got := srv.dialCount.Load(); got != tc.dials {
+				t.Fatalf("dial count = %d, want %d", got, tc.dials)
+			}
+			if srv.stallNextDial.Load() {
+				t.Fatal("no redial stalled")
+			}
+		})
 	}
 }
 
