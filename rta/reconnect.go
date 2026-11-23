@@ -132,8 +132,10 @@ func (c *Conn) runReconnect(done chan struct{}) {
 
 		// A resubscribe that times out is terminal, so do not start one on a silent socket.
 		if err := c.ping(c.ctx, conn); err != nil {
-			c.log.Warn("replacement WebSocket did not answer ping", slog.Any("error", err))
-			_ = conn.CloseNow()
+			if c.ctx.Err() == nil { // otherwise Close closes conn
+				c.log.Warn("replacement WebSocket did not answer ping", slog.Any("error", err))
+				_ = conn.CloseNow()
+			}
 			for _, subscription := range subscriptions {
 				c.trackSubscription(subscription)
 			}
