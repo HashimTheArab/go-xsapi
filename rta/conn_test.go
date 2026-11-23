@@ -610,12 +610,11 @@ func TestCloseCancelsLongReconnectBackoff(t *testing.T) {
 // subscriptions restored, or MPSD keeps treating the stale connection ID as offline.
 func TestSilentWebSocketIsReplaced(t *testing.T) {
 	shortBackoff(t)
-	shortPing(t)
 	srv := newConnTestServer(t)
 	defer srv.Close()
 	srv.silentDial.Store(1)
 
-	conn := srv.Dial(t)
+	conn := srv.Dial(t, shortPing)
 	defer conn.Close()
 
 	h := newBlockingSubscribeHandler(2)
@@ -643,13 +642,10 @@ func TestSilentWebSocketIsReplaced(t *testing.T) {
 // A redial whose upgrade never finishes must be retried, or it holds the only reconnect.
 func TestStalledRedialIsRetried(t *testing.T) {
 	shortBackoff(t)
-	oldTimeout := redialTimeout
-	redialTimeout = 250 * time.Millisecond
-	t.Cleanup(func() { redialTimeout = oldTimeout })
 	srv := newConnTestServer(t)
 	defer srv.Close()
 
-	conn := srv.Dial(t)
+	conn := srv.Dial(t, func(d *dialer) { d.redialTimeout = 250 * time.Millisecond })
 	defer conn.Close()
 
 	h := newBlockingSubscribeHandler(2)
@@ -675,11 +671,10 @@ func TestStalledRedialIsRetried(t *testing.T) {
 
 // A socket that answers pings must stay in use.
 func TestRespondingWebSocketIsKept(t *testing.T) {
-	shortPing(t)
 	srv := newConnTestServer(t)
 	defer srv.Close()
 
-	conn := srv.Dial(t)
+	conn := srv.Dial(t, shortPing)
 	defer conn.Close()
 
 	sub := NewSubscription("test-resource", NopSubscriptionHandler{})
@@ -696,11 +691,8 @@ func TestRespondingWebSocketIsKept(t *testing.T) {
 
 // shortPing gives pongs room for scheduler delays, but replaces a socket that
 // ignores pings before five of them arrive.
-func shortPing(t *testing.T) {
-	t.Helper()
-	oldInterval, oldTimeout := pingInterval, pingTimeout
-	pingInterval, pingTimeout = 5*time.Millisecond, 250*time.Millisecond
-	t.Cleanup(func() { pingInterval, pingTimeout = oldInterval, oldTimeout })
+func shortPing(d *dialer) {
+	d.pingInterval, d.pingTimeout = 5*time.Millisecond, 250*time.Millisecond
 }
 
 // shortBackoff makes reconnect attempts wait one millisecond for the test.
@@ -858,16 +850,20 @@ func (s *connTestServer) Close() {
 	s.server.Close()
 }
 
-func (s *connTestServer) Dial(t *testing.T) *Conn {
+func (s *connTestServer) Dial(t *testing.T, opts ...func(*dialer)) *Conn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	conn, err := Dial(ctx, http.DefaultClient, log)
-	if err != nil {
-		t.Fatalf("Dial returned error: %v", err)
+	d := newDialer(http.DefaultClient, log)
+	for _, opt := range opts {
+		opt(d)
 	}
-	return conn
+	c, err := d.dial(ctx)
+	if err != nil {
+		t.Fatalf("dial returned error: %v", err)
+	}
+	return newConn(c, d)
 }
 
 func (s *connTestServer) closeSubscribe(id uint32) {

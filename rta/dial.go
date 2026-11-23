@@ -64,17 +64,11 @@ func newDialer(client *http.Client, log *slog.Logger) *dialer {
 			HTTPClient:   client,
 		},
 		backoff:       reconnectBackoff,
-		pingInterval:  pingInterval,
-		pingTimeout:   pingTimeout,
-		redialTimeout: redialTimeout,
+		pingInterval:  30 * time.Second,
+		pingTimeout:   15 * time.Second,
+		redialTimeout: 30 * time.Second,
 	}
 }
-
-// pingInterval and pingTimeout are the liveness settings new dialers use; tests shorten them.
-var pingInterval, pingTimeout = 30 * time.Second, 15 * time.Second
-
-// redialTimeout is the reconnect dial limit new dialers use; tests shorten it.
-var redialTimeout = 30 * time.Second
 
 // reconnectBackoff is the backoff schedule new dialers use; tests shorten it.
 var reconnectBackoff = newReconnectBackoff
