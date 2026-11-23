@@ -610,15 +610,15 @@ func TestCloseCancelsLongReconnectBackoff(t *testing.T) {
 // subscriptions restored, or MPSD keeps treating the stale connection ID as offline.
 func TestSilentWebSocketIsReplaced(t *testing.T) {
 	shortBackoff(t)
-	shortPing(t, 5*time.Millisecond, 250*time.Millisecond)
 	srv := newConnTestServer(t)
 	defer srv.Close()
 	srv.silentDial.Store(1)
 
-	conn := srv.Dial(t)
+	conn := srv.Dial(t, shortPing)
 	defer conn.Close()
 
-	h := &countingSubscribeHandler{}
+	h := newBlockingSubscribeHandler(2)
+	defer close(h.unblock)
 	sub := NewSubscription("test-resource", h)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -626,8 +626,11 @@ func TestSilentWebSocketIsReplaced(t *testing.T) {
 		t.Fatalf("Subscribe returned error: %v", err)
 	}
 
-	waitAtomicUint32(t, &srv.dialCount, 2, "dial count")
-	waitAtomicUint32(t, &h.subscribes, 2, "HandleSubscribe calls")
+	select {
+	case <-h.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("silent socket was not replaced")
+	}
 	if !sub.Active() {
 		t.Fatal("subscription is inactive after the silent socket was replaced")
 	}
@@ -636,15 +639,58 @@ func TestSilentWebSocketIsReplaced(t *testing.T) {
 	}
 }
 
+// A replacement that stalls must be retried with its subscriptions, or they are stranded.
+func TestStalledReplacementIsRetried(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		stall func(srv *connTestServer)
+		dials uint32
+	}{
+		{"upgrade never finishes", func(srv *connTestServer) { srv.stallNextDial.Store(true) }, 2},
+		{"silent after upgrade", func(srv *connTestServer) { srv.silentDial.Store(2) }, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			shortBackoff(t)
+			srv := newConnTestServer(t)
+			defer srv.Close()
+
+			conn := srv.Dial(t, func(d *dialer) {
+				d.pingTimeout, d.redialTimeout = 250*time.Millisecond, 250*time.Millisecond
+			})
+			defer conn.Close()
+
+			h := newBlockingSubscribeHandler(2)
+			defer close(h.unblock)
+			sub := NewSubscription("test-resource", h)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := conn.Subscribe(ctx, sub); err != nil {
+				t.Fatalf("Subscribe returned error: %v", err)
+			}
+
+			tc.stall(srv)
+			_ = conn.conn.CloseNow()
+			select {
+			case <-h.entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("stalled replacement was not retried")
+			}
+			if got := srv.dialCount.Load(); got != tc.dials {
+				t.Fatalf("dial count = %d, want %d", got, tc.dials)
+			}
+			if srv.stallNextDial.Load() {
+				t.Fatal("no redial stalled")
+			}
+		})
+	}
+}
+
 // A socket that answers pings must stay in use.
 func TestRespondingWebSocketIsKept(t *testing.T) {
-	// The timeout leaves room for scheduler delays but is short enough that a
-	// socket ignoring pings is replaced before five pings arrive.
-	shortPing(t, 5*time.Millisecond, 250*time.Millisecond)
 	srv := newConnTestServer(t)
 	defer srv.Close()
 
-	conn := srv.Dial(t)
+	conn := srv.Dial(t, shortPing)
 	defer conn.Close()
 
 	sub := NewSubscription("test-resource", NopSubscriptionHandler{})
@@ -659,22 +705,10 @@ func TestRespondingWebSocketIsKept(t *testing.T) {
 	}
 }
 
-// shortPing makes new dialers ping every interval and give up after timeout.
-func shortPing(t *testing.T, interval, timeout time.Duration) {
-	t.Helper()
-	oldInterval, oldTimeout := pingInterval, pingTimeout
-	pingInterval, pingTimeout = interval, timeout
-	t.Cleanup(func() { pingInterval, pingTimeout = oldInterval, oldTimeout })
-}
-
-type countingSubscribeHandler struct {
-	NopSubscriptionHandler
-	subscribes atomic.Uint32
-}
-
-func (h *countingSubscribeHandler) HandleSubscribe(json.RawMessage) error {
-	h.subscribes.Add(1)
-	return nil
+// shortPing gives pongs room for scheduler delays, but replaces a socket that
+// ignores pings before five of them arrive.
+func shortPing(d *dialer) {
+	d.pingInterval, d.pingTimeout = 5*time.Millisecond, 250*time.Millisecond
 }
 
 // shortBackoff makes reconnect attempts wait one millisecond for the test.
@@ -802,6 +836,8 @@ type connTestServer struct {
 	// silentDial is the dial number whose socket stays open but never answers pings.
 	silentDial atomic.Uint32
 	pingCount  atomic.Uint32
+	// stallNextDial leaves the next WebSocket upgrade unanswered.
+	stallNextDial atomic.Bool
 }
 
 func newConnTestServer(t *testing.T) *connTestServer {
@@ -830,16 +866,20 @@ func (s *connTestServer) Close() {
 	s.server.Close()
 }
 
-func (s *connTestServer) Dial(t *testing.T) *Conn {
+func (s *connTestServer) Dial(t *testing.T, opts ...func(*dialer)) *Conn {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	conn, err := Dial(ctx, http.DefaultClient, log)
-	if err != nil {
-		t.Fatalf("Dial returned error: %v", err)
+	d := newDialer(http.DefaultClient, log)
+	for _, opt := range opts {
+		opt(d)
 	}
-	return conn
+	c, err := d.dial(ctx)
+	if err != nil {
+		t.Fatalf("dial returned error: %v", err)
+	}
+	return newConn(c, d)
 }
 
 func (s *connTestServer) closeSubscribe(id uint32) {
@@ -862,6 +902,10 @@ func (s *connTestServer) handle(w http.ResponseWriter, r *http.Request) {
 	if s.rejectDials.Load() {
 		s.rejectedDials.Add(1)
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if s.stallNextDial.CompareAndSwap(true, false) {
+		<-r.Context().Done()
 		return
 	}
 	var dial uint32

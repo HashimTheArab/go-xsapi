@@ -49,6 +49,8 @@ type dialer struct {
 	backoff func() backoff.BackOff
 	// pingInterval and pingTimeout bound how long a silent socket stays in use.
 	pingInterval, pingTimeout time.Duration
+	// redialTimeout bounds one reconnect dial, so a stalled handshake is retried.
+	redialTimeout time.Duration
 }
 
 func newDialer(client *http.Client, log *slog.Logger) *dialer {
@@ -61,14 +63,12 @@ func newDialer(client *http.Client, log *slog.Logger) *dialer {
 			Subprotocols: []string{subprotocol},
 			HTTPClient:   client,
 		},
-		backoff:      reconnectBackoff,
-		pingInterval: pingInterval,
-		pingTimeout:  pingTimeout,
+		backoff:       reconnectBackoff,
+		pingInterval:  30 * time.Second,
+		pingTimeout:   15 * time.Second,
+		redialTimeout: 30 * time.Second,
 	}
 }
-
-// pingInterval and pingTimeout are the liveness settings new dialers use; tests shorten them.
-var pingInterval, pingTimeout = 30 * time.Second, 15 * time.Second
 
 // reconnectBackoff is the backoff schedule new dialers use; tests shorten it.
 var reconnectBackoff = newReconnectBackoff
@@ -94,7 +94,9 @@ func (d *dialer) reconnect(ctx context.Context) (*websocket.Conn, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, backoff.Permanent(err)
 		}
-		c, err := d.dial(ctx)
+		dialCtx, cancel := context.WithTimeout(ctx, d.redialTimeout)
+		defer cancel()
+		c, err := d.dial(dialCtx)
 		if err == nil {
 			d.log.Debug("reconnected to RTA service", slog.Int("attempt", attempt))
 		}
