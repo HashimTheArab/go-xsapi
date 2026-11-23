@@ -158,7 +158,7 @@ func (c *Conn) deactivateAll(subscriptions []*Subscription) {
 }
 
 // resubscribe re-establishes all subscriptions inherited from the previous
-// WebSocket connection. Each re-subscribe attempt has a timeout of 15 seconds.
+// WebSocket connection.
 // Terminal subscription failures are reported via [SubscriptionHandler.HandleError].
 // It reports whether any subscription was interrupted by a lost connection and
 // should be retried by another reconnect attempt.
@@ -173,7 +173,7 @@ func (c *Conn) resubscribe(subscriptions []*Subscription) (interrupted bool) {
 				slog.String("resourceURI", subscription.ResourceURI()),
 			))
 
-			ctx, cancel := context.WithTimeout(c.ctx, time.Second*15)
+			ctx, cancel := context.WithTimeout(c.ctx, c.dialer.resubscribeTimeout())
 			defer cancel()
 			subscription.opMu.Lock()
 			err := c.subscribe(ctx, subscription)

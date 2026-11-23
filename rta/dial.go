@@ -70,6 +70,15 @@ func newDialer(client *http.Client, log *slog.Logger) *dialer {
 // pingInterval and pingTimeout are the liveness settings new dialers use; tests shorten them.
 var pingInterval, pingTimeout = 30 * time.Second, 15 * time.Second
 
+// resubscribeTimeout outlasts the probe: an unanswered resubscribe on a silent
+// socket must be interrupted and retried, because timing out is final.
+func (d *dialer) resubscribeTimeout() time.Duration {
+	return d.pingInterval + 2*d.pingTimeout
+}
+
+// reconnectDialTimeout bounds one redial, so a stalled handshake is retried.
+const reconnectDialTimeout = 30 * time.Second
+
 // reconnectBackoff is the backoff schedule new dialers use; tests shorten it.
 var reconnectBackoff = newReconnectBackoff
 
@@ -94,7 +103,9 @@ func (d *dialer) reconnect(ctx context.Context) (*websocket.Conn, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, backoff.Permanent(err)
 		}
-		c, err := d.dial(ctx)
+		dialCtx, cancel := context.WithTimeout(ctx, reconnectDialTimeout)
+		defer cancel()
+		c, err := d.dial(dialCtx)
 		if err == nil {
 			d.log.Debug("reconnected to RTA service", slog.Int("attempt", attempt))
 		}
