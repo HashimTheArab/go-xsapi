@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -482,6 +483,9 @@ func (c *Conn) ensureWebSocket(ctx context.Context) (*websocket.Conn, error) {
 // triggers a reconnect. If the Conn was closed by the user via [Conn.Close],
 // no reconnect is attempted.
 func (c *Conn) read(conn *websocket.Conn) {
+	ctx, cancel := context.WithCancel(c.ctx)
+	defer cancel()
+	go c.probe(ctx, conn)
 	for {
 		var payload []json.RawMessage
 		if err := wsjson.Read(context.Background(), conn, &payload); err != nil {
@@ -507,6 +511,37 @@ func (c *Conn) read(conn *websocket.Conn) {
 			continue
 		}
 	}
+}
+
+// probe pings conn until it stops answering, then closes it so read reconnects:
+// MPSD treats session members on a silent socket's connection ID as offline.
+func (c *Conn) probe(ctx context.Context, conn *websocket.Conn) {
+	ticker := time.NewTicker(c.dialer.pingInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		err := c.ping(ctx, conn)
+		if err == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return // read ended or Conn closed
+		}
+		c.log.Warn("RTA WebSocket did not answer ping; reconnecting", slog.Any("error", err))
+		_ = conn.CloseNow()
+		return
+	}
+}
+
+// ping waits up to the ping timeout for conn, which read must be reading, to answer.
+func (c *Conn) ping(ctx context.Context, conn *websocket.Conn) error {
+	ctx, cancel := context.WithTimeout(ctx, c.dialer.pingTimeout)
+	defer cancel()
+	return conn.Ping(ctx)
 }
 
 // Close closes the websocket connection with websocket.StatusNormalClosure.
