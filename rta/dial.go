@@ -49,6 +49,8 @@ type dialer struct {
 	backoff func() backoff.BackOff
 	// pingInterval and pingTimeout bound how long a silent socket stays in use.
 	pingInterval, pingTimeout time.Duration
+	// redialTimeout bounds one reconnect dial, so a stalled handshake is retried.
+	redialTimeout time.Duration
 }
 
 func newDialer(client *http.Client, log *slog.Logger) *dialer {
@@ -61,23 +63,18 @@ func newDialer(client *http.Client, log *slog.Logger) *dialer {
 			Subprotocols: []string{subprotocol},
 			HTTPClient:   client,
 		},
-		backoff:      reconnectBackoff,
-		pingInterval: pingInterval,
-		pingTimeout:  pingTimeout,
+		backoff:       reconnectBackoff,
+		pingInterval:  pingInterval,
+		pingTimeout:   pingTimeout,
+		redialTimeout: redialTimeout,
 	}
 }
 
 // pingInterval and pingTimeout are the liveness settings new dialers use; tests shorten them.
 var pingInterval, pingTimeout = 30 * time.Second, 15 * time.Second
 
-// resubscribeTimeout outlasts the probe: an unanswered resubscribe on a silent
-// socket must be interrupted and retried, because timing out is final.
-func (d *dialer) resubscribeTimeout() time.Duration {
-	return d.pingInterval + 2*d.pingTimeout
-}
-
-// reconnectDialTimeout bounds one redial, so a stalled handshake is retried.
-const reconnectDialTimeout = 30 * time.Second
+// redialTimeout is the reconnect dial limit new dialers use; tests shorten it.
+var redialTimeout = 30 * time.Second
 
 // reconnectBackoff is the backoff schedule new dialers use; tests shorten it.
 var reconnectBackoff = newReconnectBackoff
@@ -103,7 +100,7 @@ func (d *dialer) reconnect(ctx context.Context) (*websocket.Conn, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, backoff.Permanent(err)
 		}
-		dialCtx, cancel := context.WithTimeout(ctx, reconnectDialTimeout)
+		dialCtx, cancel := context.WithTimeout(ctx, d.redialTimeout)
 		defer cancel()
 		c, err := d.dial(dialCtx)
 		if err == nil {

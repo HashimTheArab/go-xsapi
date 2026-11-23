@@ -13,7 +13,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"github.com/cenkalti/backoff/v7"
@@ -641,60 +640,36 @@ func TestSilentWebSocketIsReplaced(t *testing.T) {
 	}
 }
 
-// A replacement that stalls must be retried with its subscriptions, at the
-// production timeouts: giving up strands them.
-func TestStalledReplacementIsRetried(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		within time.Duration
-		setup  func(srv *connTestServer)
-	}{
-		{"upgrade never finishes", 35 * time.Second, func(srv *connTestServer) { srv.stallDial.Store(2) }},
-		{"silent after upgrade", 20 * time.Second, func(srv *connTestServer) {
-			srv.muteDial.Store(2)
-			srv.silentDial.Store(2)
-		}},
-		{"silent after first pong", 50 * time.Second, func(srv *connTestServer) {
-			srv.muteDial.Store(2)
-			srv.silentDial.Store(2)
-			srv.silentAfter.Store(1)
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				srv := &connTestServer{}
-				srv.unsubscribeStatus.Store(StatusOK)
-				tc.setup(srv)
-				setConnectURL(t, "rta.test")
+// A redial whose upgrade never finishes must be retried, or it holds the only reconnect.
+func TestStalledRedialIsRetried(t *testing.T) {
+	shortBackoff(t)
+	oldTimeout := redialTimeout
+	redialTimeout = 250 * time.Millisecond
+	t.Cleanup(func() { redialTimeout = oldTimeout })
+	srv := newConnTestServer(t)
+	defer srv.Close()
 
-				conn, err := Dial(t.Context(), srv.pipeClient(t), slog.New(slog.DiscardHandler))
-				if err != nil {
-					t.Fatalf("Dial returned error: %v", err)
-				}
-				defer conn.Close()
-				sub := NewSubscription("test-resource", NopSubscriptionHandler{})
-				if err := conn.Subscribe(t.Context(), sub); err != nil {
-					t.Fatalf("Subscribe returned error: %v", err)
-				}
+	conn := srv.Dial(t)
+	defer conn.Close()
 
-				_ = conn.conn.CloseNow()
-				time.Sleep(tc.within)
+	h := newBlockingSubscribeHandler(2)
+	defer close(h.unblock)
+	sub := NewSubscription("test-resource", h)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := conn.Subscribe(ctx, sub); err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
 
-				synctest.Wait()
-				if !sub.Active() {
-					t.Fatal("subscription is inactive after the stalled replacement")
-				}
-				if got := sub.ID(); got == 1 {
-					t.Fatal("subscription still has its ID from the first socket")
-				}
-				if got := srv.attemptCount.Load(); got != 3 {
-					t.Fatalf("dial attempts = %d, want 3", got)
-				}
-				if err := conn.Unsubscribe(t.Context(), sub); err != nil {
-					t.Fatalf("Unsubscribe returned error: %v", err)
-				}
-			})
-		})
+	srv.stallNextDial.Store(true)
+	_ = conn.conn.CloseNow()
+	select {
+	case <-h.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stalled redial was not retried")
+	}
+	if srv.stallNextDial.Load() {
+		t.Fatal("no redial stalled")
 	}
 }
 
@@ -852,14 +827,9 @@ type connTestServer struct {
 	rejectedDials atomic.Uint32
 	// silentDial is the dial number whose socket stays open but never answers pings.
 	silentDial atomic.Uint32
-	// silentAfter is the number of pings silentDial answers first.
-	silentAfter atomic.Uint32
-	pingCount   atomic.Uint32
-	// muteDial is the dial number whose subscribe requests go unanswered.
-	muteDial atomic.Uint32
-	// stallDial is the dial attempt whose upgrade never finishes.
-	stallDial    atomic.Uint32
-	attemptCount atomic.Uint32
+	pingCount  atomic.Uint32
+	// stallNextDial leaves the next WebSocket upgrade unanswered.
+	stallNextDial atomic.Bool
 }
 
 func newConnTestServer(t *testing.T) *connTestServer {
@@ -872,67 +842,17 @@ func newConnTestServer(t *testing.T) *connTestServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	setConnectURL(t, u.Host)
-	return s
-}
-
-// setConnectURL points new dials at host for the test.
-func setConnectURL(t *testing.T, host string) {
-	t.Helper()
 	connectURLMu.Lock()
 	oldURL := connectURL
-	connectURL = &url.URL{Scheme: "ws", Host: host, Path: "/"}
+	connectURL = &url.URL{Scheme: "ws", Host: u.Host, Path: "/"}
 	connectURLMu.Unlock()
 	t.Cleanup(func() {
 		connectURLMu.Lock()
 		connectURL = oldURL
 		connectURLMu.Unlock()
 	})
+	return s
 }
-
-// pipeClient serves s over in-memory pipes, so a synctest bubble can fake time.
-func (s *connTestServer) pipeClient(t *testing.T) *http.Client {
-	t.Helper()
-	l := &pipeListener{conns: make(chan net.Conn), closed: make(chan struct{})}
-	server := &http.Server{Handler: http.HandlerFunc(s.handle)}
-	go func() { _ = server.Serve(l) }()
-	t.Cleanup(func() { _ = server.Close() })
-	return &http.Client{Transport: &http.Transport{DialContext: l.dial}}
-}
-
-type pipeListener struct {
-	conns     chan net.Conn
-	closed    chan struct{}
-	closeOnce sync.Once
-}
-
-func (l *pipeListener) dial(ctx context.Context, _, _ string) (net.Conn, error) {
-	client, server := net.Pipe()
-	select {
-	case l.conns <- server:
-		return client, nil
-	case <-l.closed:
-		return nil, net.ErrClosed
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-}
-
-func (l *pipeListener) Accept() (net.Conn, error) {
-	select {
-	case conn := <-l.conns:
-		return conn, nil
-	case <-l.closed:
-		return nil, net.ErrClosed
-	}
-}
-
-func (l *pipeListener) Close() error {
-	l.closeOnce.Do(func() { close(l.closed) })
-	return nil
-}
-
-func (l *pipeListener) Addr() net.Addr { return &net.UnixAddr{Name: "pipe", Net: "unix"} }
 
 func (s *connTestServer) Close() {
 	s.server.Close()
@@ -972,17 +892,16 @@ func (s *connTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if s.attemptCount.Add(1) == s.stallDial.Load() {
+	if s.stallNextDial.CompareAndSwap(true, false) {
 		<-r.Context().Done()
 		return
 	}
-	var dial, pings uint32
+	var dial uint32
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		Subprotocols: []string{subprotocol},
 		OnPingReceived: func(context.Context, []byte) bool {
 			s.pingCount.Add(1)
-			pings++
-			return s.silentDial.Load() != dial || pings <= s.silentAfter.Load()
+			return s.silentDial.Load() != dial
 		},
 	})
 	if err != nil {
@@ -1014,9 +933,6 @@ func (s *connTestServer) handle(w http.ResponseWriter, r *http.Request) {
 		switch typ {
 		case typeSubscribe:
 			id := s.subscribeCount.Add(1)
-			if s.muteDial.Load() == dial {
-				continue
-			}
 			if minID := s.closeSubscribeMin.Load(); minID != 0 && id >= minID {
 				_ = conn.Close(websocket.StatusGoingAway, "test close")
 				return

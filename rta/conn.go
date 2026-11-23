@@ -519,22 +519,23 @@ func (c *Conn) probe(ctx context.Context, conn *websocket.Conn) {
 	ticker := time.NewTicker(c.dialer.pingInterval)
 	defer ticker.Stop()
 	for {
-		pingCtx, cancel := context.WithTimeout(ctx, c.dialer.pingTimeout)
-		err := conn.Ping(pingCtx)
-		cancel()
-		if ctx.Err() != nil {
-			return // read ended or Conn closed
-		}
-		if err != nil {
-			c.log.Warn("RTA WebSocket did not answer ping; reconnecting", slog.Any("error", err))
-			_ = conn.CloseNow()
-			return
-		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+		pingCtx, cancel := context.WithTimeout(ctx, c.dialer.pingTimeout)
+		err := conn.Ping(pingCtx)
+		cancel()
+		if err == nil {
+			continue
+		}
+		if ctx.Err() != nil {
+			return // read ended or Conn closed
+		}
+		c.log.Warn("RTA WebSocket did not answer ping; reconnecting", slog.Any("error", err))
+		_ = conn.CloseNow()
+		return
 	}
 }
 
