@@ -610,7 +610,7 @@ func TestCloseCancelsLongReconnectBackoff(t *testing.T) {
 // subscriptions restored, or MPSD keeps treating the stale connection ID as offline.
 func TestSilentWebSocketIsReplaced(t *testing.T) {
 	shortBackoff(t)
-	shortPing(t, 5*time.Millisecond, 250*time.Millisecond)
+	shortPing(t)
 	srv := newConnTestServer(t)
 	defer srv.Close()
 	srv.silentDial.Store(1)
@@ -618,7 +618,8 @@ func TestSilentWebSocketIsReplaced(t *testing.T) {
 	conn := srv.Dial(t)
 	defer conn.Close()
 
-	h := &countingSubscribeHandler{}
+	h := newBlockingSubscribeHandler(2)
+	defer close(h.unblock)
 	sub := NewSubscription("test-resource", h)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -626,8 +627,11 @@ func TestSilentWebSocketIsReplaced(t *testing.T) {
 		t.Fatalf("Subscribe returned error: %v", err)
 	}
 
-	waitAtomicUint32(t, &srv.dialCount, 2, "dial count")
-	waitAtomicUint32(t, &h.subscribes, 2, "HandleSubscribe calls")
+	select {
+	case <-h.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("silent socket was not replaced")
+	}
 	if !sub.Active() {
 		t.Fatal("subscription is inactive after the silent socket was replaced")
 	}
@@ -638,9 +642,7 @@ func TestSilentWebSocketIsReplaced(t *testing.T) {
 
 // A socket that answers pings must stay in use.
 func TestRespondingWebSocketIsKept(t *testing.T) {
-	// The timeout leaves room for scheduler delays but is short enough that a
-	// socket ignoring pings is replaced before five pings arrive.
-	shortPing(t, 5*time.Millisecond, 250*time.Millisecond)
+	shortPing(t)
 	srv := newConnTestServer(t)
 	defer srv.Close()
 
@@ -659,22 +661,13 @@ func TestRespondingWebSocketIsKept(t *testing.T) {
 	}
 }
 
-// shortPing makes new dialers ping every interval and give up after timeout.
-func shortPing(t *testing.T, interval, timeout time.Duration) {
+// shortPing gives pongs room for scheduler delays, but replaces a socket that
+// ignores pings before five of them arrive.
+func shortPing(t *testing.T) {
 	t.Helper()
 	oldInterval, oldTimeout := pingInterval, pingTimeout
-	pingInterval, pingTimeout = interval, timeout
+	pingInterval, pingTimeout = 5*time.Millisecond, 250*time.Millisecond
 	t.Cleanup(func() { pingInterval, pingTimeout = oldInterval, oldTimeout })
-}
-
-type countingSubscribeHandler struct {
-	NopSubscriptionHandler
-	subscribes atomic.Uint32
-}
-
-func (h *countingSubscribeHandler) HandleSubscribe(json.RawMessage) error {
-	h.subscribes.Add(1)
-	return nil
 }
 
 // shortBackoff makes reconnect attempts wait one millisecond for the test.
